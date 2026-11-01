@@ -193,8 +193,9 @@ export function AllowlistsPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Allowlists & permissions</h1>
-          <p className="text-muted-foreground">
+          <span className="eyebrow">Tune · who Talky answers</span>
+          <h1 className="mt-1.5 text-2xl leading-tight font-semibold tracking-[-0.03em] md:text-[32px]">Access rules</h1>
+          <p className="mt-1.5 text-sm text-muted-foreground">
             Control who can reach the bot and how groups behave. Changes apply after Save.
           </p>
         </div>

@@ -173,3 +173,79 @@ export function applyPermissionsSliceToConfig(
     recordManualOutboundMessages: slice.recordManualOutboundMessages,
   }
 }
+
+/** Mirrors GET `/api/claude/status`. */
+export type ClaudeStatus = {
+  mediatorEnabled: boolean
+  mediatorExclusive: boolean
+  mediatorChats: string[]
+  connected: boolean
+  connection: 'open' | 'close' | 'connecting' | null
+  ownJid: string | null
+  pendingCount: number
+}
+
+/** Mirrors `ClaudeBridgeEvent` in `src/claude-bridge.ts` (GET `/api/claude/pending`). */
+export type ClaudeEvent = {
+  id: string
+  timestampISO: string
+  chatJid: string
+  senderJid: string
+  senderName?: string
+  chatName?: string
+  isGroup: boolean
+  mentionedMe: boolean
+  text: string
+  voiceTranscript?: boolean
+  media?: {
+    kind: string
+    mimeType: string
+    path: string
+    fileName?: string
+    caption?: string
+  }
+}
+
+export type OutcomeCounts = { replied: number; claude: number; silent: number }
+
+export type VoiceTraits = {
+  messages: number
+  wordsPerMessage: number
+  messagesPerBurst: number
+  emojiPer10: number
+  lowercaseShare: number
+}
+
+/** Mirrors `OverviewStats` in `src/web/stats.ts` (GET `/api/stats/overview`). */
+export type OverviewStats = {
+  generatedAtISO: string
+  today: OutcomeCounts & {
+    received: number
+    reachedEngine: number
+    sentByTalky: number
+    sentByYou: number
+    dailyLimit: number
+    medianReplySeconds: number | null
+  }
+  hourly: Array<OutcomeCounts & { hour: number; received: number }>
+  daily: Array<OutcomeCounts & { dateISO: string; received: number; medianReplySeconds: number | null }>
+  heatmap: number[][]
+  chats: Array<{
+    jid: string
+    name: string | null
+    isGroup: boolean
+    received7d: number
+    daily7d: number[]
+    outcomes7d: OutcomeCounts
+    medianReplySeconds: number | null
+    lastAtISO: string | null
+  }>
+  claude: { pending: number; oldestPendingISO: string | null; handledToday: number }
+  voice: {
+    windowDays: number
+    you: VoiceTraits
+    talky: VoiceTraits
+    lengthBuckets: Array<{ label: string; you: number; talky: number }>
+    wordsTrend: Array<{ dateISO: string; you: number | null; talky: number | null }>
+  }
+}

@@ -31,18 +31,25 @@ export function ThemeToggle() {
   }
 
   return (
-    <div className="flex gap-1 px-2 py-2">
-      <span className="sr-only">Theme</span>
+    <div
+      role="group"
+      aria-label="Theme"
+      className="flex gap-0.5 rounded-lg bg-sidebar-accent p-0.5 group-data-[collapsible=icon]:flex-col"
+    >
       {items.map(({ value, label, icon: Icon }) => (
         <Button
           key={value}
           type="button"
-          variant={theme === value ? 'secondary' : 'ghost'}
+          variant="ghost"
           size="icon"
-          className="size-8 shrink-0"
+          className={
+            theme === value
+              ? 'h-8 flex-1 bg-sidebar text-sidebar-accent-foreground hover:bg-sidebar hover:text-sidebar-accent-foreground'
+              : 'h-8 flex-1 text-sidebar-foreground/70 hover:bg-transparent hover:text-sidebar-accent-foreground'
+          }
           onClick={() => setTheme(value)}
           title={label}
-          aria-label={label}
+          aria-label={`${label} theme`}
           aria-pressed={theme === value}
         >
           <Icon className="size-4" />

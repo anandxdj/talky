@@ -333,8 +333,9 @@ export function PersonaPage() {
 
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Persona</h1>
-          <p className="text-muted-foreground max-w-2xl">
+          <span className="eyebrow">persona/*.md</span>
+          <h2 id="persona-files" className="mt-1 text-xl font-semibold tracking-[-0.02em]">Persona files</h2>
+          <p className="max-w-2xl text-sm text-muted-foreground">
             Core voice in <code className="text-xs">persona/*.md</code>, per-contact tweaks, and
             AI-assisted updates from real chat logs — improve your voice as you go.
           </p>

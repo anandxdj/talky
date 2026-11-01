@@ -13,7 +13,10 @@ import {
   applyPermissionsSliceToConfig,
   readPermissionsSlice,
   type ChatEntry,
+  type ClaudeEvent,
+  type ClaudeStatus,
   type DebugLogEvent,
+  type OverviewStats,
   type GroupRow,
   type PersonaPayload,
   type StatusPayload,
@@ -33,7 +36,15 @@ type TalkyConsoleState = {
   editingPersona: PersonaPayload
   personaDirty: boolean
   debugEvents: DebugLogEvent[]
+  claudeStatus: ClaudeStatus | null
+  claudePending: ClaudeEvent[]
+  stats: OverviewStats | null
+  /** True when the last status poll failed (bot not running / proxy mismatch). */
+  offline: boolean
   refresh: () => Promise<void>
+  refreshStats: () => Promise<void>
+  /** Update one or more config keys server-side (validated; locked keys are refused). */
+  updateConfig: (patch: Partial<TalkyConfig>) => Promise<boolean>
   setEditingPersona: (next: PersonaPayload) => void
   savePersona: () => Promise<void>
   patchConfigDraft: (
@@ -53,6 +64,7 @@ type TalkyConsoleState = {
 const TalkyConsoleContext = createContext<TalkyConsoleState | null>(null)
 
 const POLL_MS = 3000
+const STATS_POLL_MS = 15_000
 /** After relink, poll status faster while Baileys emits a new QR. */
 const RELINK_FAST_POLL_MS = 1000
 const RELINK_FAST_POLL_DURATION_MS = 60_000
@@ -98,6 +110,10 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
   const [configDraft, setConfigDraft] = useState<TalkyConfig | null>(null)
   const [configDirty, setConfigDirty] = useState(false)
   const fetchOkRef = useRef(true)
+  const [claudeStatus, setClaudeStatus] = useState<ClaudeStatus | null>(null)
+  const [claudePending, setClaudePending] = useState<ClaudeEvent[]>([])
+  const [stats, setStats] = useState<OverviewStats | null>(null)
+  const [offline, setOffline] = useState(false)
 
   const fetchData = useCallback(async () => {
     const st = await fetchJsonSafe<StatusPayload>('/api/status')
@@ -107,16 +123,21 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
     const fetchGroups =
       st?.whatsappConnected === true ? fetchJsonSafe<GroupRow[]>('/api/groups') : Promise.resolve(null)
 
-    const [cfg, unauth, grp, per, ch, dbg] = await Promise.all([
+    const [cfg, unauth, grp, per, ch, dbg, cst, cpend] = await Promise.all([
       fetchJsonSafe<TalkyConfig>('/api/config'),
       fetchJsonSafe<UnauthorizedCandidate[]>('/api/unauthorized'),
       fetchGroups,
       fetchJsonSafe<PersonaPayload>('/api/persona'),
       fetchJsonSafe<Record<string, ChatEntry[]>>('/api/chats'),
       fetchJsonSafe<DebugLogEvent[]>('/api/logs/events?limit=300'),
+      fetchJsonSafe<ClaudeStatus>('/api/claude/status'),
+      fetchJsonSafe<ClaudeEvent[]>('/api/claude/pending'),
     ])
+    if (cst) setClaudeStatus(cst)
+    if (cpend && Array.isArray(cpend)) setClaudePending(cpend)
 
     const heartbeatOk = st !== null
+    setOffline(!heartbeatOk)
 
     if (cfg) {
       setConfig(cfg)
@@ -166,6 +187,42 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
       window.clearInterval(id)
     }
   }, [fetchData])
+
+  const refreshStats = useCallback(async () => {
+    const next = await fetchJsonSafe<OverviewStats>('/api/stats/overview')
+    if (next) setStats(next)
+  }, [])
+
+  useEffect(() => {
+    const boot = window.setTimeout(() => void refreshStats(), 0)
+    const id = window.setInterval(() => void refreshStats(), STATS_POLL_MS)
+    return () => {
+      window.clearTimeout(boot)
+      window.clearInterval(id)
+    }
+  }, [refreshStats])
+
+  const updateConfig = useCallback(
+    async (patch: Partial<TalkyConfig>): Promise<boolean> => {
+      try {
+        const res = await fetchJson<{ success: boolean; rejectedKeys?: string[] }>('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        })
+        if (res.rejectedKeys && res.rejectedKeys.length > 0) {
+          toast.warning(`Not applied (locked or invalid): ${res.rejectedKeys.join(', ')}`)
+        }
+        void fetchData()
+        return true
+      } catch (e) {
+        console.error('[Talky UI] update config', e)
+        toast.error('Failed to update configuration')
+        return false
+      }
+    },
+    [fetchData],
+  )
 
   const setEditingPersona = useCallback((next: PersonaPayload) => {
     setEditingPersonaState(next)
@@ -410,7 +467,13 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
       editingPersona,
       personaDirty,
       debugEvents,
+      claudeStatus,
+      claudePending,
+      stats,
+      offline,
       refresh: fetchData,
+      refreshStats,
+      updateConfig,
       setEditingPersona,
       savePersona,
       patchConfigDraft,
@@ -431,7 +494,13 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
       editingPersona,
       personaDirty,
       debugEvents,
+      claudeStatus,
+      claudePending,
+      stats,
+      offline,
       fetchData,
+      refreshStats,
+      updateConfig,
       setEditingPersona,
       savePersona,
       patchConfigDraft,
