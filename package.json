@@ -49,6 +49,7 @@
     "memory:clear": "bun run src/cli.ts memory:clear",
     "memory:export": "bun run src/cli.ts memory:export",
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
     "ui:dev": "cd web-ui && bun run dev",
     "ui:build": "cd web-ui && bun run build",
     "ui:preview": "cd web-ui && bun run preview"

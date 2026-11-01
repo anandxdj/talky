@@ -69,3 +69,20 @@ export async function classifyMessageForMemory(
     return null;
   }
 }
+
+export function inferMemoryFact(text: string): string | null {
+  if (!text) return null;
+  if (text.length > 220) return null;
+  const low = text.toLowerCase();
+  const personalCue = low.includes("i ") || low.includes("my ") || low.includes("i'm ");
+  const imperativeCue =
+    /\b(remember|dont forget|don't forget|note that|keep in mind|remind me|save this)\b/i.test(
+      text
+    );
+  const scheduleCue =
+    /\b(meeting|meet|call|appointment|appt|deadline|due|flight|interview|class|exam|party|dinner|lunch)\b/i.test(
+      text
+    ) && /\b(at|on|by|tomorrow|tonight|today|am|pm|\d{1,2}(:\d{2})?)\b/i.test(text);
+  if (!personalCue && !imperativeCue && !scheduleCue) return null;
+  return text;
+}
