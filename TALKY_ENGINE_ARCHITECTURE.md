@@ -12,45 +12,74 @@ Talky is a completely local, self-hosted personal WhatsApp AI agent. Once linked
 
 Talky is built using **TypeScript** and optimized to run on **Bun**. The engine operates through a series of distinct modular layers:
 
-### 1. 🟢 WhatsApp Integration (`src/whatsapp.ts`)
+### 1. 🟢 WhatsApp Integration (`src/whatsapp.ts`, `src/whatsapp-cli.ts`)
 
-- **The Connector:** Uses the unofficial `baileys` library to handle persistent WhatsApp web sessions and QR authentication.
-- **Human Simulation:** It manages live messaging events and applies deliberate, human-like typing delays so the bot doesn't reply instantly like an emotionless script.
+- **The Connector:** `WhatsAppAgent` uses the unofficial `baileys` library to handle persistent WhatsApp Web sessions, QR authentication and the inbound message loop.
+- **Human Simulation:** It applies deliberate, human-like typing delays so replies don't land instantly.
+- **Kept thin on purpose:** pure helpers live in focused modules (below) so the class mostly orchestrates. One-shot CLI helpers (list groups, proactive send) live in `whatsapp-cli.ts`.
 
-### 2. 🧠 Decision Engine (`src/decision.ts`)
+### 2. 🛡️ Access Policy (`src/policy/access.ts`, `src/lid-map.ts`)
 
-- **The Gatekeeper:** Not every message needs a reply. This engine uses hard rules (like `@mentions` and allowed config lists) and soft rules (LLM-evaluated relevance scores) to decide if Talky should step in or stay quiet. This naturally prevents it from spamming group chats.
+- **Who may reach the bot:** group allowlist and mutes, direct-chat mode (`allowlist` / `all` / `none`), self-chat, and whether a chat is routed to the Claude mediator. Allowlist entries match both identities of a contact (`<phone>@s.whatsapp.net` and `<lid>@lid`).
+- Pure functions with injectable LID lookup → covered by `tests/policy-access.test.ts`.
 
-### 3. 🎭 Persona Layer (`src/persona.ts`, `/persona` folder)
+### 3. 🧠 Decision Engine (`src/decision.ts`)
 
-- **The Soul:** This is what gives the bot your voice. A set of Markdown files (`soul.md`, `communication_rules.md`) define who the bot is, how to speak, and how to treat specific contacts. The agent reads these to ensure it stays in character.
+- **The Gatekeeper:** Not every message needs a reply. Hard rules (`@mentions`, allowlists) and soft rules (LLM-scored relevance) decide whether Talky steps in or stays quiet. Every decision is appended to `data/logs/decisions.md`.
 
-### 4. 🗄️ Memory System (`src/memory.ts`, `src/memory-db.ts`, `src/embeddings.ts`)
+### 4. 🎭 Persona Layer (`src/persona.ts`, `/persona` folder)
 
-- **The Brain:** Talky features a hybrid local memory module. It uses a local SQLite index backed by Gemini generated embeddings.
-- **Searching:** When replying, it performs semantic search (cosine similarity) to find past memories relevant to the conversation. It acts as a long-term storage unit that continuously and automatically updates facts over time.
-- **Optional Mem0:** Can hook into Mem0 for cloud-based semantic memory.
+- **The Soul:** Markdown files (`soul.md`, `communication_rules.md`, per-contact and per-group profiles) define who the bot is and how it speaks.
 
-### 5. ⏰ Scheduling & Reminders (`src/scheduler.ts`, `src/reminders.ts`)
+### 5. 🗄️ Memory System (`src/memory.ts`, `src/memory-db.ts`, `src/embeddings.ts`)
 
-- **The Taskmaster:** Handles asynchronous tasks like sending multi-part "burst" messages, generating daily summary digests, and issuing reminder alerts.
-- **Self-Chat:** A unique feature where you can DM your own number to command the bot behind the scenes.
+- **The Brain:** Hybrid local memory — SQLite + FTS5 (BM25) + Gemini embeddings (cosine similarity, MMR, temporal decay). Markdown stays the source of truth. Optional Mem0 on top.
 
-### 6. 🛠️ Tools (`src/tools.ts`)
+### 6. ✍️ Reply Shaping (`src/reply/parse.ts`, `src/reply/intents.ts`)
 
-- **The Hands:** Allows Talky to reach outside of just text generation. Talky can send Klipy GIFs, interact with your local file system, and share media.
+- Turns model output into WhatsApp messages: `|||` burst splitting (max 2 for Gemini replies, max 5 for mediated sends), `NO_REPLY` handling, text-form tool calls, and intent detection (tool list, voice note, GIF).
+
+### 7. 🎙️ Media (`src/media/*`, `src/transcribe.ts`, `src/voice/`)
+
+- MIME helpers, Gemini TTS prompts and PCM → WAV → Ogg/Opus transcoding, image generation URLs, sticker packs; voice-note transcription.
+
+### 8. ⏰ Scheduling & Self-Chat (`src/scheduler.ts`, `src/reminders.ts`, `src/self-chat.ts`)
+
+- Daily digests, reminders, and the self-DM assistant you command from your own number.
+
+### 9. 🛠️ Tools (`src/tools.ts`, `src/tool-executor.ts`)
+
+- Klipy GIFs, local file read/share (bounded by `localFileAllowedRoots`), stickers, images, TTS.
+
+### 10. 🤝 Claude Mediator Bridge (`src/claude-bridge.ts`)
+
+- Queues allowed inbound messages to `data/claude/pending.jsonl` (attachments to `data/media/`) for an external Claude Code session that replies through the HTTP API. Writes are crash-safe: rewrites go through a temp file + atomic rename, and a torn last line is terminated before the next append. Enqueue/ack are synchronous, so they can't interleave inside the single Talky process.
+
+### 11. 🖥️ Control Server & Web Panel (`src/web/*`, `web-ui/`)
+
+- `control-server.ts` serves the React panel and the `/api/*` REST API on `127.0.0.1` only.
+- `auth.ts` guards every API request: loopback `Host` (anti DNS-rebinding) → no foreign `Origin` / `Sec-Fetch-Site: cross-site` → JSON-only writes → `X-Talky-Token` from `data/control-token`.
+- Config writes go through `applyConfigPatch()` in `config.ts`: unknown keys and wrong types are rejected, values are normalised exactly like `config.yaml`, and command-executing / file-access keys (`claudeTriggerCommand`, `localFileAllowedRoots`, …) are locked to the YAML file.
+- `stats.ts` derives dashboard analytics from data already on disk (chat logs, decision log, Claude queue): hourly outcomes, 14-day series, weekday × hour heatmap, per-chat stats, reply latency, and the "voice fingerprint" (your manual messages vs Talky's).
+- `web-ui/` is a Vite + React + shadcn panel with light/dark themes, a mobile bottom-tab layout, and a dependency-free chart kit (`components/charts`) following colour-blind-safe palette rules.
+
+### 🧪 Tests & CI
+
+- `bun test` runs the suites in `tests/` (policy, reply parsing, intents, media/errors, decision, JID utils, Claude queue, API guard, config validation, stats).
+- `.github/workflows/ci.yml` runs typecheck + tests and builds the web UI on every push and PR.
 
 ---
 
 ## ⚙️ How the Engine Processes a Message (The Loop)
 
 1.  **Receive:** An incoming message hits the Baileys socket inside `whatsapp.ts`.
-2.  **Filter Noise:** Basic spam/status messages are dropped by `log-noise-filter.ts`.
-3.  **Decide:** `decision.ts` scores the message to see if a response is needed or allowed.
-4.  **Recall Context:** If returning a reply, `memory.ts` and `embeddings.ts` fetch relevant past interactions and facts about the user.
-5.  **Inject Persona:** The fetched memories, recent chat history, and your `/persona/soul.md` are combined into a massive prompt bundle via `prompts.ts`.
-6.  **Generate:** `gemini.ts` sends this bundle to the Gemini AI to formulate the exact human-like reply.
-7.  **Respond:** A human-like typing delay is applied, and the message is sent back to the chat via `whatsapp.ts`. `memory.ts` updates its database with this new interaction.
+2.  **Filter Noise:** Status/broadcast and stale messages are dropped (`jid.ts`, startup grace).
+3.  **Check access:** `policy/access.ts` applies allowlists, mutes and direct-chat mode; allowed messages may be routed to the Claude mediator queue instead of Gemini.
+4.  **Decide:** `decision.ts` scores the message to see if a response is needed or allowed.
+5.  **Recall Context:** If returning a reply, `memory.ts` and `embeddings.ts` fetch relevant past interactions and facts about the user.
+6.  **Inject Persona:** The fetched memories, recent chat history, and your `/persona/soul.md` are combined into a massive prompt bundle via `prompts.ts`.
+7.  **Generate:** `gemini.ts` sends this bundle to the Gemini AI to formulate the exact human-like reply.
+8.  **Respond:** A human-like typing delay is applied, and the message is sent back to the chat via `whatsapp.ts`. `memory.ts` updates its database with this new interaction.
 
 ---
 

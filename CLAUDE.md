@@ -9,7 +9,8 @@ official API). See `README.md` and `TALKY_ENGINE_ARCHITECTURE.md` for full docs.
 ```bash
 bun install            # install deps
 bun run start          # start the bot (QR pairing on first run)
-bun run typecheck      # tsc --noEmit
+bun run typecheck      # tsc --noEmit (src + tests)
+bun test               # unit tests in tests/
 bun run ui:build       # build the web control panel (served at http://127.0.0.1:4173)
 ```
 
@@ -37,6 +38,21 @@ Claude → GET  /api/claude/pending  → decide → POST /api/claude/send → Wh
 Base URL: `http://127.0.0.1:4173` (override port with `WEB_UI_PORT`). The server
 binds 127.0.0.1 only. The bot must be running (`bun run start`) for the API and
 for sending; the queue files under `data/claude/` are readable even when it isn't.
+
+**Auth (required).** Every `/api/*` call needs the header
+`X-Talky-Token: <contents of data/control-token>` (created with mode 0600 on first start).
+The server also rejects non-loopback `Host` headers, foreign browser `Origin`s, and
+non-JSON request bodies — see `src/web/auth.ts`. From a shell:
+
+```bash
+TALKY_TOKEN=$(cat data/control-token)
+curl -s -H "X-Talky-Token: $TALKY_TOKEN" http://127.0.0.1:4173/api/claude/pending
+curl -s -H "X-Talky-Token: $TALKY_TOKEN" -H "Content-Type: application/json" \
+  --data-binary @/tmp/wa-<chat>.json http://127.0.0.1:4173/api/claude/send
+```
+
+`TALKY_API_TOKEN=off` in the bot's environment disables only the token check (local
+scripting); the host/origin/JSON checks always apply.
 
 ### Endpoints
 
@@ -113,7 +129,8 @@ Agent calls in a single message). Each subagent must:
 2. Compose ≤2 messages (`|||` separator) following `persona.communicationRules` exactly
    (language mix, tone, emoji); ground in `history` + `memories` + `ownerMemories`.
 3. Send via temp-file body (UTF-8 safety):
-   `cat > /tmp/wa-<chat>.json` then `curl --data-binary @/tmp/wa-<chat>.json -X POST .../api/claude/send`
+   `cat > /tmp/wa-<chat>.json` then
+   `curl -H "X-Talky-Token: $(cat data/control-token)" -H "Content-Type: application/json" --data-binary @/tmp/wa-<chat>.json -X POST .../api/claude/send`
 4. `POST /api/claude/ack` with its event ids.
 5. Report the exact text sent + API confirmations back to the main agent.
 
@@ -126,7 +143,7 @@ escalate to the main agent on errors or sensitive content instead of improvising
 claudeMediatorEnabled: true     # master switch
 claudeMediatorExclusive: true   # true = Gemini auto-reply suppressed in mediated chats
 claudeMediatorChats: []         # restrict to specific JIDs (empty = all allowed chats)
-claudeTriggerCommand: ""        # optional shell command spawned on new events
+claudeTriggerCommand: ""        # optional shell command spawned on new events (config.yaml only — the API refuses to change it)
                                 # (e.g. headless: claude -p "Handle pending WhatsApp events per CLAUDE.md")
 claudeTriggerCooldownSeconds: 30
 ```
@@ -148,6 +165,7 @@ Notes:
 
 - `src/claude-bridge.ts` — queue, media persistence, trigger spawn
 - `src/whatsapp.ts` — `enqueueForClaudeMediator()` hook in `handleMessage`, `sendMediatedText()`
-- `src/web/control-server.ts` — `/api/claude/*` routes
+- `src/web/control-server.ts` — `/api/claude/*` routes (plus `/api/stats/overview` for the dashboard)
+- `src/web/auth.ts` — host/origin/JSON/token guard for every `/api/*` request
 - `scripts/wait-for-events.ts` — blocking watcher used as the wake-up signal
 - `data/claude/pending.jsonl` / `handled.jsonl` / `signal.json` — runtime queue state
