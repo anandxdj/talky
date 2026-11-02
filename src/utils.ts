@@ -5,8 +5,12 @@ export function sleep(ms: number): Promise<void> {
 }
 
 export function randomBetween(min: number, max: number): number {
-  if (max <= min) return min;
-  const value = crypto.randomInt(min, max + 1);
+  // crypto.randomInt throws on non-integer bounds; delays scaled by "slower" instructions
+  // (×1.5) or a fractional value in config.yaml are not integers. Same result for integers.
+  const lo = Math.ceil(min);
+  const hi = Math.floor(max);
+  if (hi <= lo) return lo;
+  const value = crypto.randomInt(lo, hi + 1);
   return value;
 }
 
