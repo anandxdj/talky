@@ -1,7 +1,8 @@
 import { serve } from "bun";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { join, resolve, sep } from "path";
-import { PERSONA_CONTACTS_DIR, PERSONA_GROUPS_DIR } from "../config.js";
+import { CONFIG_PATH, DATA_DIR, PERSONA_CONTACTS_DIR, PERSONA_GROUPS_DIR } from "../config.js";
+import { resolveMediatorSendFile } from "../tools.js";
 import { GeminiClient } from "../gemini.js";
 import { listGeminiModelsForGenerateContent } from "../gemini-models.js";
 import { applyConfigPatch, loadConfig, loadEnv, saveConfig } from "../config.js";
@@ -444,12 +445,23 @@ export function startControlServer(runtime: WhatsAppAgent) {
                             { status: 400 }
                           );
                         }
-                        if (!existsSync(filePath)) {
-                          return Response.json({ error: "file not found" }, { status: 404 });
+                        // Same policy as the share tool, plus Talky's own data/ (token, chats)
+                        // and config.yaml are never sendable; saved attachments are.
+                        const allowedFile = resolveMediatorSendFile(filePath, loadConfig(), {
+                          mediaDir: MEDIA_INBOX_DIR,
+                          privateDirs: [DATA_DIR],
+                          privateFiles: [CONFIG_PATH]
+                        });
+                        if (!allowedFile.ok || !allowedFile.absolutePath) {
+                          const missing = (allowedFile.reason ?? "").startsWith("file not found");
+                          return Response.json(
+                            { error: allowedFile.reason ?? "file not allowed" },
+                            { status: missing ? 404 : 403 }
+                          );
                         }
                         const sentFile = await runtime.sendMediatedFile({
                           to,
-                          absolutePath: filePath,
+                          absolutePath: allowedFile.absolutePath,
                           fileName: typeof body.fileName === "string" ? body.fileName : undefined,
                           caption: typeof body.caption === "string" ? body.caption : undefined
                         });
