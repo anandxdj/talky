@@ -333,9 +333,21 @@ export function startControlServer(runtime: WhatsAppAgent) {
                         return Response.json({ success: true, config: newConfig, rejectedKeys });
                     }
                     case "unauthorized/resolve": {
-                        const jid = typeof body.jid === "string" ? body.jid : "";
+                        const jid = typeof body.jid === "string" ? body.jid.trim() : "";
                         const action = typeof body.action === "string" ? body.action : "";
-                        const listType = typeof body.listType === "string" ? body.listType : "";
+                        if (!jid || (action !== "allow" && action !== "discard")) {
+                          return Response.json(
+                            { error: "body must include 'jid' and action 'allow' or 'discard'" },
+                            { status: 400 }
+                          );
+                        }
+                        // Missing/unknown listType: decide from the JID, never default to groups.
+                        const listType =
+                          body.listType === "direct" || body.listType === "group"
+                            ? body.listType
+                            : jid.endsWith("@g.us")
+                              ? "group"
+                              : "direct";
                         if (action === "allow") {
                             const config = loadConfig();
                             if (listType === "direct") {
