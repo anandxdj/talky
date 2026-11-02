@@ -250,7 +250,7 @@ async function suiteApi() {
       eq(r.body.config.directChatMode, "all", "directChatMode");
       await p.api("/api/config", { method: "POST", json: { directChatMode: "allowlist" } });
     });
-    await check(suite, "non-object JSON body for POST /api/config → 400 [BUG-31]", async () => {
+    await check(suite, "non-object JSON body for POST /api/config → 400 [BUG-30]", async () => {
       eq((await p.api("/api/config", { method: "POST", json: [1, 2] })).status, 400, "array body");
     });
     await check(suite, "malformed JSON → 400 JSON error", async () => {
@@ -297,7 +297,7 @@ async function suiteApi() {
       const r = await p.api("/api/logs/events?limit=abc");
       assert(Array.isArray(r.body) && r.body.length > 0, `got ${r.text.slice(0, 60)}`);
     });
-    await check(suite, "/apiconfig is not treated as /api/config [BUG-30]", async () => {
+    await check(suite, "/apiconfig is not treated as /api/config [BUG-29]", async () => {
       const r = await p.api("/apiconfig");
       assert(!(r.body && typeof r.body === "object" && "botName" in r.body), "served config");
     });
