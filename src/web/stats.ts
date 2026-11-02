@@ -119,9 +119,15 @@ export function median(values: number[]): number | null {
   return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
 }
 
+function isPlaceholder(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed === "[empty]" || trimmed === "[media]";
+}
+
 export function wordCount(text: string): number {
   const trimmed = text.trim();
-  if (!trimmed || trimmed === "[empty]") return 0;
+  // Placeholders written for empty/media-only messages are not words.
+  if (!trimmed || trimmed === "[empty]" || trimmed === "[media]") return 0;
   return trimmed.split(/\s+/).length;
 }
 
@@ -191,7 +197,7 @@ export function computeVoiceTraits(messages: Array<{ ms: number; chat: string; t
     lastMs = message.ms;
     words += wordCount(message.text);
     emoji += (message.text.match(EMOJI_RE) ?? []).length;
-    const firstLetter = message.text.match(/\p{L}/u)?.[0];
+    const firstLetter = isPlaceholder(message.text) ? undefined : message.text.match(/\p{L}/u)?.[0];
     if (firstLetter) {
       lettered += 1;
       if (firstLetter === firstLetter.toLowerCase() && firstLetter !== firstLetter.toUpperCase()) {
