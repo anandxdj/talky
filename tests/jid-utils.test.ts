@@ -59,11 +59,17 @@ describe("normalizeJidInput", () => {
 });
 
 describe("toPhoneJid / toDirectTargetJid / isJidLike", () => {
-  test("toPhoneJid converts phone, digit-only lid/raw; rejects groups", () => {
+  test("toPhoneJid converts phone and digit-only raw JIDs; rejects groups", () => {
     expect(toPhoneJid("919876543210")).toBe("919876543210@s.whatsapp.net");
-    expect(toPhoneJid("123456@lid")).toBe("123456@s.whatsapp.net");
+    expect(toPhoneJid("919876543210@c.us")).toBe("919876543210@s.whatsapp.net");
     expect(() => toPhoneJid("12036@g.us")).toThrow();
     expect(() => toPhoneJid("abc@c.us")).toThrow();
+  });
+
+  test("toPhoneJid leaves @lid input as a LID (LID digits are not a phone number)", () => {
+    expect(toPhoneJid("123456@lid")).toBe("123456@lid");
+    expect(toPhoneJid(" 123456:7@lid ")).toBe("123456@lid");
+    expect(toPhoneJid("123456@lid")).not.toContain("@s.whatsapp.net");
   });
 
   test("toDirectTargetJid normalizes any accepted input", () => {

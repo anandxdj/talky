@@ -74,7 +74,9 @@ export function inferMemoryFact(text: string): string | null {
   if (!text) return null;
   if (text.length > 220) return null;
   const low = text.toLowerCase();
-  const personalCue = low.includes("i ") || low.includes("my ") || low.includes("i'm ");
+  // "i " must be the standalone word "i" (word boundary before it) — a bare substring
+  // check also matched words ending in "i" ("hi bro", "wifi down") as first-person facts.
+  const personalCue = /\bi /.test(low) || low.includes("my ") || low.includes("i'm ");
   const imperativeCue =
     /\b(remember|dont forget|don't forget|note that|keep in mind|remind me|save this)\b/i.test(
       text

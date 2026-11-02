@@ -1,8 +1,12 @@
 // Chat access policy: who Talky may read/reply to/mediate.
 //
 // `jidNormalizedUser` is imported from Baileys' standalone jid-utils module (the same
-// function the "baileys" entry point re-exports) so this module stays loadable without
-// pulling in the full Baileys/libsignal runtime — e.g. from unit tests.
+// function the "baileys" entry point re-exports via lib/index.js -> WABinary/index.js) so
+// this module stays loadable without pulling in the full Baileys/libsignal runtime — e.g.
+// from unit tests. The deep path is safe to resolve: baileys' package.json has no "exports"
+// map (so every file under lib/ is importable) and package.json pins baileys to an exact
+// version. tests/policy-access.test.ts pins both facts plus the normaliser's behaviour, so
+// a Baileys upgrade that moves/encapsulates this file fails loudly in CI.
 import { jidNormalizedUser } from "baileys/lib/WABinary/jid-utils.js";
 import { lidDigitsForPhone, phoneDigitsForLid } from "../lid-map";
 import type { AppConfig } from "../types";

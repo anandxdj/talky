@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { jidNormalizedUser } from "baileys/lib/WABinary/jid-utils.js";
 import {
   buildDirectIdentifiers,
   evaluateChatPolicy,
@@ -238,5 +241,38 @@ describe("shouldMediateChat", () => {
   test("a group is not matched by a DM filter entry with the same digits", () => {
     const config = { claudeMediatorEnabled: true, claudeMediatorChats: ["12036@s.whatsapp.net"] };
     expect(shouldMediateChat(config, "12036@g.us", lidLookup)).toBe(false);
+  });
+});
+
+// src/policy/access.ts deep-imports jidNormalizedUser from baileys/lib/WABinary/jid-utils.js
+// (the main "baileys" entry needs libsignal at load time). Pin the facts that make that safe.
+describe("baileys deep-import contract (src/policy/access.ts)", () => {
+  const root = path.join(import.meta.dir, "..");
+  const readJson = (file: string) => JSON.parse(readFileSync(file, "utf-8"));
+
+  test("baileys has no package.json exports map, so the deep path stays resolvable", () => {
+    const pkg = readJson(path.join(root, "node_modules/baileys/package.json"));
+    expect(pkg.exports).toBeUndefined();
+  });
+
+  test("baileys is pinned to an exact version (no ^ / ~ range)", () => {
+    const pkg = readJson(path.join(root, "package.json"));
+    expect(pkg.dependencies.baileys).toMatch(/^\d+\.\d+\.\d+(-[\w.]+)?$/);
+  });
+
+  test("the main baileys entry re-exports the same jid-utils module", () => {
+    const lib = path.join(root, "node_modules/baileys/lib");
+    expect(readFileSync(path.join(lib, "index.js"), "utf-8")).toContain("./WABinary/index.js");
+    expect(readFileSync(path.join(lib, "WABinary/index.js"), "utf-8")).toContain(
+      "./jid-utils.js"
+    );
+  });
+
+  test("jidNormalizedUser behaves as buildDirectIdentifiers relies on", () => {
+    expect(jidNormalizedUser("919876543210:12@s.whatsapp.net")).toBe("919876543210@s.whatsapp.net");
+    expect(jidNormalizedUser("919876543210@c.us")).toBe("919876543210@s.whatsapp.net");
+    expect(jidNormalizedUser("124245216596056:3@lid")).toBe("124245216596056@lid");
+    expect(jidNormalizedUser("12036@g.us")).toBe("12036@g.us");
+    expect(jidNormalizedUser("919876543210")).toBe("");
   });
 });

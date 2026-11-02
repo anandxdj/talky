@@ -285,6 +285,8 @@ export function maybeSpawnClaudeTrigger(
   config: AppConfig,
   onWarn?: (message: string) => void
 ): boolean {
+  // Paused: events still queue, but nothing is woken up to answer them.
+  if (config.repliesPaused === true) return false;
   const command = config.claudeTriggerCommand.trim();
   if (!command) return false;
   const now = Date.now();

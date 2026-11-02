@@ -440,6 +440,8 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
         configDraft,
         readPermissionsSlice(configDraft),
       )
+      // The pause switch has its own button; a draft cloned before pausing must not undo it.
+      delete body.repliesPaused
       await fetchJson<{ success: boolean }>('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

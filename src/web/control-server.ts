@@ -27,6 +27,7 @@ import {
   loadOrCreateControlToken
 } from "./auth.js";
 import { loadOverviewStats } from "./stats.js";
+import { checkPausedSend } from "../policy/pause.js";
 
 const DEFAULT_PORT = process.env.WEB_UI_PORT ? parseInt(process.env.WEB_UI_PORT) : 4173;
 
@@ -167,6 +168,7 @@ export function startControlServer(runtime: WhatsAppAgent) {
                   mediatorEnabled: cfg.claudeMediatorEnabled,
                   mediatorExclusive: cfg.claudeMediatorExclusive,
                   mediatorChats: cfg.claudeMediatorChats,
+                  repliesPaused: runtime.isRepliesPaused(),
                   connected: snapshot.whatsappConnected,
                   connection: snapshot.whatsappConnection,
                   ownJid: runtime.getOwnJid(),
@@ -405,6 +407,10 @@ export function startControlServer(runtime: WhatsAppAgent) {
                     }
                     // --- Claude mediator bridge ---
                     case "claude/send": {
+                        const pausedSend = checkPausedSend(runtime.isRepliesPaused(), body);
+                        if (pausedSend) {
+                          return Response.json({ error: pausedSend.error }, { status: pausedSend.status });
+                        }
                         const to = typeof body.to === "string" ? body.to.trim() : "";
                         const text = typeof body.text === "string" ? body.text : "";
                         if (!to || !text.trim()) {
@@ -417,6 +423,10 @@ export function startControlServer(runtime: WhatsAppAgent) {
                         return Response.json({ success: true, ...sent });
                     }
                     case "claude/send-file": {
+                        const pausedFile = checkPausedSend(runtime.isRepliesPaused(), body);
+                        if (pausedFile) {
+                          return Response.json({ error: pausedFile.error }, { status: pausedFile.status });
+                        }
                         const to = typeof body.to === "string" ? body.to.trim() : "";
                         const filePath = typeof body.path === "string" ? body.path.trim() : "";
                         if (!to || !filePath) {

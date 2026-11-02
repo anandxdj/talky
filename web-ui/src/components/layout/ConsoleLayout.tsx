@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { BrandMark } from '@/components/talky/BrandMark'
+import { PausedBanner } from '@/components/talky/PauseReplies'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import {
   Sidebar,
@@ -30,6 +31,7 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar'
 import { useTalkyConsole } from '@/context/TalkyConsoleContext'
+import { useRepliesPause } from '@/hooks/use-replies-pause'
 import { cn } from '@/lib/utils'
 
 type NavItem = { to: string; label: string; short: string; icon: LucideIcon; badge?: 'queue' }
@@ -132,12 +134,13 @@ function StatusStrip() {
     : claudeStatus.mediatorExclusive
       ? 'claude (exclusive)'
       : 'claude + gemini'
+  const { paused } = useRepliesPause()
   const connected = status?.whatsappConnected === true
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b bg-card px-4 py-2 font-mono text-xs text-muted-foreground md:px-8">
       <span className="flex items-center gap-1.5 font-semibold text-foreground">
-        <StatusDot state={offline ? 'bad' : connected ? 'good' : 'warn'} />
-        {offline ? 'OFFLINE' : connected ? 'LIVE' : 'NOT LINKED'}
+        <StatusDot state={offline ? 'bad' : connected && !paused ? 'good' : 'warn'} />
+        {offline ? 'OFFLINE' : !connected ? 'NOT LINKED' : paused ? 'PAUSED' : 'LIVE'}
       </span>
       <span>engine: {engine}</span>
       {stats ? (
@@ -240,6 +243,7 @@ export function ConsoleLayout() {
         <div className="md:hidden">
           <StatusStrip />
         </div>
+        <PausedBanner />
         <div className="flex flex-1 flex-col gap-5 px-4 pt-6 pb-24 md:px-8 md:pb-12">
           <Outlet />
         </div>

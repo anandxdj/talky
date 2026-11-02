@@ -80,7 +80,8 @@ const defaultConfig: AppConfig = {
   claudeMediatorExclusive: true,
   claudeMediatorChats: [],
   claudeTriggerCommand: "",
-  claudeTriggerCooldownSeconds: 30
+  claudeTriggerCooldownSeconds: 30,
+  repliesPaused: false
 };
 
 export function ensureRuntimeDirs(): void {
@@ -348,7 +349,11 @@ export function normalizeConfig(parsed: Partial<AppConfig> | undefined): AppConf
       defaultConfig.claudeTriggerCooldownSeconds,
       5,
       3_600
-    )
+    ),
+    repliesPaused:
+      typeof parsed?.repliesPaused === "boolean"
+        ? parsed.repliesPaused
+        : defaultConfig.repliesPaused
   };
 }
 

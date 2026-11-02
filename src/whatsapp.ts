@@ -73,6 +73,13 @@ import { SelfChatAssistant } from "./self-chat";
 import { buildMediaSendTargets, shouldIgnoreIncomingJid, toDirectTargetJid } from "./jid";
 import { transcribeAudio } from "./transcribe";
 import { Scheduler } from "./scheduler";
+import {
+  isRepliesPaused,
+  pausedDecisionLogLine,
+  shouldExtractMemoryWhilePaused,
+  shouldMediateSelfChat,
+  shouldSuppressAutoReply
+} from "./policy/pause";
 import { VoiceboxClient } from "./voice/voicebox-client";
 import { fetchJoinedGroups } from "./whatsapp-cli";
 import {
@@ -920,8 +927,12 @@ export class WhatsAppAgent {
       // Slash commands (/help, /remind, …) keep the built-in assistant; when the Claude
       // mediator is on, every other self-message falls through to the mediator hook below
       // so Claude is the one replying in your own DM.
+      // While replies are paused the self DM always uses the built-in assistant.
       const slashCommand = incomingText.trimStart().startsWith("/");
-      const mediateSelfChat = !slashCommand && this.shouldMediateWithClaude(context.chatJid);
+      const mediateSelfChat = shouldMediateSelfChat(this.config, {
+        slashCommand,
+        mediatedChat: !slashCommand && this.shouldMediateWithClaude(context.chatJid)
+      });
       if (!mediateSelfChat) {
         this.writeHistory(context, "incoming");
         const handled = await this.handleSelfChatMessage(context, incomingText, raw);
@@ -969,6 +980,26 @@ export class WhatsAppAgent {
         await this.persistIncomingAutoMemory(context);
         return;
       }
+    }
+
+    // "Pause replies" kill switch: history and the mediator queue are already written above
+    // and direct-chat memory is still extracted; only the automatic reply (and every
+    // tool/voice/sticker/gif send generateReply could trigger) is skipped. Self-chat stays
+    // live for the owner.
+    if (shouldSuppressAutoReply(this.config, { isSelfChat })) {
+      this.aiStage("SKIP", `replies paused -> no reply for ${context.chatJid}`);
+      this.logMinimalFlow("AI", `${context.chatJid} | replies paused, not answering`, context.senderJid);
+      this.logger.info(
+        { msgId: raw?.key?.id, chatJid: context.chatJid, senderJid: context.senderJid },
+        "skipping reply: replies paused"
+      );
+      appendDecisionLog(
+        pausedDecisionLogLine(new Date().toISOString(), context.chatJid, context.senderJid)
+      );
+      if (shouldExtractMemoryWhilePaused(context)) {
+        await this.persistIncomingAutoMemory(context);
+      }
+      return;
     }
 
     const recentHistory = readRecentChatHistory(context.chatJid, this.config.historyWindow);
@@ -2645,6 +2676,10 @@ export class WhatsAppAgent {
     if (!this.config.proactiveOnStartupEnabled) return;
     const targets = this.config.proactiveOnStartupDirectJids ?? [];
     if (targets.length === 0) return;
+    if (isRepliesPaused(this.config)) {
+      this.logger.info({ targets: targets.length }, "skipping startup proactive messages: replies paused");
+      return;
+    }
 
     for (const rawTarget of targets) {
       const targetJid = toDirectTargetJid(rawTarget);
@@ -2922,6 +2957,11 @@ export class WhatsAppAgent {
 
   public getOwnJid(): string {
     return this.ownJid;
+  }
+
+  /** Live "Pause replies" state (follows POST /api/config without a restart). */
+  public isRepliesPaused(): boolean {
+    return isRepliesPaused(this.config);
   }
 
   /** Send a local file as a WhatsApp attachment on behalf of the Claude mediator. */
