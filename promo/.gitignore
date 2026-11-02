@@ -8,3 +8,4 @@ hf/layout-*.js
 renders/*.raw.mp4
 renders/*-draft.mp4
 renders/work-*/
+renders/.*.hf-transaction-*/
