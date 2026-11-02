@@ -236,11 +236,18 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const savePersona = useCallback(async () => {
-    await fetchJson('/api/persona', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editingPersona),
-    })
+    try {
+      await fetchJson('/api/persona', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editingPersona),
+      })
+    } catch (e) {
+      // Callers fire-and-forget; report here instead of leaking an unhandled rejection.
+      console.error('[Talky UI] save persona', e)
+      toast.error('Could not save persona — your edits are kept. Is Talky running?')
+      return
+    }
     toast.success('Persona saved')
     personaDirtyRef.current = false
     setPersonaDirty(false)
@@ -253,11 +260,17 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
       action: 'allow' | 'discard',
       listType: 'direct' | 'group',
     ) => {
-      await fetchJson('/api/unauthorized/resolve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jid, action, listType }),
-      })
+      try {
+        await fetchJson('/api/unauthorized/resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jid, action, listType }),
+        })
+      } catch (e) {
+        console.error('[Talky UI] resolve unknown sender', e)
+        toast.error(`Could not ${action === 'allow' ? 'allow' : 'dismiss'} ${jid} — is Talky running?`)
+        return
+      }
       toast.success(action === 'allow' ? 'Allowed' : 'Dismissed')
       void fetchData()
     },
