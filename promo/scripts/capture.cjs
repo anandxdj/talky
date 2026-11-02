@@ -28,7 +28,7 @@ const path = require('node:path')
 
 const REPO = path.resolve(__dirname, '..', '..')
 const HF = path.join(REPO, 'promo', 'hf')
-const WORK = path.join(REPO, 'promo', '.work')
+const WORK = path.join(REPO, 'promo', 'capture-frames')
 const FPS = 60
 const PORT = Number(process.env.PROMO_PORT || 4319)
 const ONLY = process.argv.slice(2).filter((a) => !a.startsWith('-'))

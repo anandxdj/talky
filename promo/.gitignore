@@ -1,11 +1,7 @@
-# Regenerable working files (bun run promo:capture)
-.work/
-hf/assets/
+# Generated per-cut HyperFrames projects (hard links to hf/assets; recreate with promo:compose)
 hf/build/
-hf/layout-*.js
 .hyperframes/
-# intermediate / draft renders
+# HyperFrames render scratch
 renders/*.raw.mp4
-renders/*-draft.mp4
 renders/work-*/
 renders/.*.hf-transaction-*/

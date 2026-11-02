@@ -65,4 +65,19 @@ promo/
 - **Sample data:** `scripts/preview-server.ts`, then re-capture.
 - **Music:** none by design. The ♪ beats in `STORYBOARD.md` mark the hits. Add a track in HyperFrames Studio (an `<audio id=… data-start=…>` in the composition) or in any editor.
 
-The capture assets and build folders are git-ignored (regenerable). The finished renders are committed.
+## Assets in this folder
+
+Everything captured or produced so far is committed:
+
+| Path | What |
+|------|------|
+| `hf/assets/wide/`, `hf/assets/tall/` | Footage the film uses. Includes page plates (`*-start.png` with charts at 0%, `*-end.png` as rendered), chart-reveal clips (`overview-hourly.mp4`, `overview-heat.mp4`, `voice-words.mp4`, `voice-dumbbell.mp4`, `voice-lengths.mp4`), the recorded interactions (`queue.mp4`, `control.mp4`), and the dark-mode stills. Desktop is captured at 2×, phone at 3×. |
+| `hf/assets/fonts/` | Geist and Geist Mono (OFL), copied from the panel build. |
+| `hf/layout-wide.js`, `hf/layout-tall.js` | Region boxes and recorded cursor/click points for each capture. |
+| `capture-frames/` | Raw full-resolution screenshots of every UI state in the recorded interactions (queue reply, Pause replies). |
+| `stills/keyframes/` | The keyframe stills shared for review (16:9 and 9:16). |
+| `stills/contact-sheets/` | HyperFrames snapshot contact sheets from each review pass. |
+| `stills/panel-*.png` | Full-page screenshots of the real panel (desktop and phone layouts) used to plan the shots. |
+| `renders/*-draft.mp4` | Low-res draft renders (960×540 and 540×960, 30 fps). |
+
+`hf/build/` is the only generated folder left out of git. It holds hard links to `hf/assets/` and is recreated by `bun run promo:compose`. Re-running the capture overwrites `hf/assets/`, `hf/layout-*.js` and `capture-frames/`.
