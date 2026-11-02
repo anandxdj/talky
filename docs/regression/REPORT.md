@@ -64,6 +64,8 @@ All other fixes affect only the panel, the local API or the statistics.
 
 ### Left open, and why
 
+Details, code locations and suggested fixes for each are in [UNFIXED.md](UNFIXED.md).
+
 | ID | Why it is not fixed here |
 | -- | ------------------------ |
 | BUG-21 malformed `config.yaml` | The right behaviour is a product decision: refuse to start, or fall back to defaults. Falling back silently would change who the bot answers. Since BUG-12 the API returns a JSON error instead of a stack page. |
