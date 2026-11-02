@@ -80,12 +80,17 @@ async function openPage(browser: any, p: Preview, combo: Combo = { vp: "desktop"
   });
   page.on("pageerror", (e: Error) => consoleErrors.push(`pageerror: ${e.message}`));
   currentPage = page;
+  /** Select a queue thread and wait until ITS pane is showing (the pane is keyed per chat). */
+  const openThread = async (name: string) => {
+    await page.getByRole("button", { name: new RegExp(name) }).first().click();
+    await page.locator(`section[aria-label^="Conversation with ${name}"]`).waitFor({ timeout: 5000 });
+  };
   const goto = async (route: string) => {
     await page.goto(p.base + route);
     await page.waitForLoadState("networkidle").catch(() => {});
     await page.waitForTimeout(400);
   };
-  return { context, page, consoleErrors, goto };
+  return { context, page, consoleErrors, goto, openThread };
 }
 
 const ROUTES = [
@@ -386,7 +391,7 @@ async function suiteInteractions(pw: PW) {
   const browser = await pw.chromium.launch();
   const cfg = async () => (await p.api("/api/config")).body;
   try {
-    const { context, page, goto, consoleErrors } = await openPage(browser, p);
+    const { context, page, goto, consoleErrors, openThread } = await openPage(browser, p);
 
     await check(suite, "engine switch Gemini/Claude/Both writes config.yaml", async () => {
       await goto("/overview");
@@ -421,7 +426,7 @@ async function suiteInteractions(pw: PW) {
     await check(suite, "Live queue composer sends with force while paused", async () => {
       await p.api("/api/config", { method: "POST", json: { repliesPaused: true } });
       await goto("/queue");
-      await page.getByRole("button", { name: /Weekend Plans/ }).first().click();
+      await openThread("Weekend Plans");
       const box = page.getByPlaceholder("Write the reply in your own voice…");
       await box.fill("on my way");
       await page.getByRole("button", { name: /^Send/ }).click();
@@ -435,7 +440,7 @@ async function suiteInteractions(pw: PW) {
       await goto("/queue");
       const row = page.getByRole("button", { name: /Deep/ }).first();
       assert((await row.innerText()).includes("×2"), "thread count badge");
-      await row.click();
+      await openThread("Deep");
       await page.getByRole("button", { name: /Stay silent/ }).click();
       await page.getByText(/Marked 2 messages as handled/).waitFor({ timeout: 4000 });
       eq((await p.api("/api/claude/pending")).body.length, 0, "pending after ack");
@@ -454,7 +459,7 @@ async function suiteInteractions(pw: PW) {
     await check(suite, "⌘↵ / Ctrl+Enter sends; ||| splits into parts", async () => {
       await requeue("3000-KEY1");
       await goto("/queue");
-      await page.getByRole("button", { name: /Deep/ }).first().click();
+      await openThread("Deep");
       const box = page.getByPlaceholder("Write the reply in your own voice…");
       await box.fill("one ||| two ||| three");
       await box.press("Control+Enter");
@@ -465,7 +470,7 @@ async function suiteInteractions(pw: PW) {
     await check(suite, "Ctrl+Enter with >5 parts is blocked like the Send button [BUG-03]", async () => {
       await requeue("3000-KEY2");
       await goto("/queue");
-      await page.getByRole("button", { name: /Deep/ }).first().click();
+      await openThread("Deep");
       const before = p.sends().length;
       const box = page.getByPlaceholder("Write the reply in your own voice…");
       await box.fill("1|||2|||3|||4|||5|||6");
@@ -478,7 +483,7 @@ async function suiteInteractions(pw: PW) {
     await check(suite, "pressing Ctrl+Enter twice sends once [BUG-03]", async () => {
       await requeue("3000-KEY3");
       await goto("/queue");
-      await page.getByRole("button", { name: /Deep/ }).first().click();
+      await openThread("Deep");
       const before = p.sends().length;
       const box = page.getByPlaceholder("Write the reply in your own voice…");
       await box.fill("just once");
@@ -493,7 +498,7 @@ async function suiteInteractions(pw: PW) {
     await check(suite, "send OK but ack fails → reports sent, not 'Send failed' [BUG-16]", async () => {
       await requeue("3000-ACK1");
       await goto("/queue");
-      await page.getByRole("button", { name: /Deep/ }).first().click();
+      await openThread("Deep");
       await page.route("**/api/claude/ack", (route: any) => route.fulfill({ status: 500, body: '{"error":"disk full"}' }));
       await page.getByPlaceholder("Write the reply in your own voice…").fill("ack will fail");
       await page.getByRole("button", { name: /^Send/ }).click();
