@@ -215,7 +215,7 @@ export function ChatsPage() {
                                 e.stopPropagation()
                                 setPendingDeleteJid(jid)
                               }}
-                              aria-label="Delete chat history"
+                              aria-label={`Delete chat history for ${groupNames.get(jid) ?? jid}`}
                             >
                               <Trash2Icon className="size-3.5" />
                             </Button>

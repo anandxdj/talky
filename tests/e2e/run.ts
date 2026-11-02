@@ -704,11 +704,12 @@ async function suiteInteractions(pw: PW) {
     await check(suite, "Conversations: delete dialog cancel keeps file, confirm removes it", async () => {
       await goto("/conversations?jid=919812345678%40s.whatsapp.net");
       const file = path.join(p.dir, "data", "chats", "919812345678@s.whatsapp.net.md");
-      const row = page.locator("li", { hasText: "919812345678@s.whatsapp.net" });
-      await row.getByRole("button", { name: "Delete chat history" }).click();
+      // Each row's delete button names its chat [BUG-32].
+      const del = page.getByRole("button", { name: "Delete chat history for 919812345678@s.whatsapp.net", exact: true });
+      await del.click();
       await page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }).click();
       assert(existsSync(file), "deleted on cancel");
-      await row.getByRole("button", { name: "Delete chat history" }).click();
+      await del.click();
       await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click();
       await page.waitForTimeout(800);
       assert(!existsSync(file), "file still exists");
