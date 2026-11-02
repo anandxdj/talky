@@ -5,11 +5,23 @@ import path from "node:path";
 import {
   checkRequestOrigin,
   checkRequestToken,
+  guardOptionsFromEnv,
   loadOrCreateControlToken,
   type GuardOptions
 } from "../src/web/auth";
 
 const opts: GuardOptions = { port: 4173, token: "a".repeat(64), tokenRequired: true };
+
+function guardOptionsFromEnvWith(origins: string): GuardOptions {
+  const previous = process.env.TALKY_ALLOWED_ORIGINS;
+  process.env.TALKY_ALLOWED_ORIGINS = origins;
+  try {
+    return guardOptionsFromEnv(4173, "a".repeat(64));
+  } finally {
+    if (previous === undefined) delete process.env.TALKY_ALLOWED_ORIGINS;
+    else process.env.TALKY_ALLOWED_ORIGINS = previous;
+  }
+}
 
 function req(method: string, headers: Record<string, string>, body?: string): Request {
   return new Request("http://127.0.0.1:4173/api/config", { method, headers, body });
@@ -23,6 +35,14 @@ describe("checkRequestOrigin", () => {
       "content-type": "application/json"
     }, "{}");
     expect(checkRequestOrigin(r, opts)).toBeNull();
+  });
+
+  test("compares Origin case-insensitively, without widening it (BUG-33)", () => {
+    expect(checkRequestOrigin(req("GET", { host: "127.0.0.1:4173", origin: "http://LOCALHOST:4173" }), opts)).toBeNull();
+    expect(checkRequestOrigin(req("GET", { host: "127.0.0.1:4173", origin: "HTTP://127.0.0.1:4173/" }), opts)).toBeNull();
+    expect(checkRequestOrigin(req("GET", { host: "127.0.0.1:4173", origin: "http://EVIL.example" }), opts)?.status).toBe(403);
+    const extra = guardOptionsFromEnvWith("http://My-Box.local:8080");
+    expect(checkRequestOrigin(req("GET", { host: "127.0.0.1:4173", origin: "http://my-box.local:8080" }), extra)).toBeNull();
   });
 
   test("allows the Vite dev server origin via proxy", () => {
