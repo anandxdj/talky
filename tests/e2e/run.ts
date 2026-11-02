@@ -650,6 +650,8 @@ async function suiteInteractions(pw: PW) {
       await page.getByRole("alertdialog").getByRole("button", { name: /Delete all local data/ }).click();
       await page.waitForTimeout(600);
       assert(p.sends().some((s) => s.action === "factoryReset"), "reset after RESET");
+      // The toast must point at the page that exists now [BUG-39].
+      await page.getByText(/Scan the new QR in Settings/).first().waitFor({ timeout: 3000 });
     });
 
     await check(suite, "Persona: edit → dirty → save writes soul.md", async () => {

@@ -404,7 +404,7 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
         }
         toast.message(
           action === 'full-relink'
-            ? 'Factory reset complete — local data wiped. Scan the new QR in Actions or terminal.'
+            ? 'Factory reset complete — local data wiped. Scan the new QR in Settings or the terminal.'
             : `Session ${action} initiated`,
         )
         void fetchData()
