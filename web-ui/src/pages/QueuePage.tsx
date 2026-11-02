@@ -149,18 +149,29 @@ function ConversationPane({
     inFlight.current = true
     setBusy(true)
     try {
-      await apiJson('/api/claude/send', {
-        method: 'POST',
-        // A human typed this, so it goes out even while automatic replies are paused.
-        body: JSON.stringify({ to: head.chatJid, text: draft, force: true }),
-      })
-      await ack()
-      toast.success(`Sent ${parts.length} message${parts.length === 1 ? '' : 's'} to ${chatTitle(head)}`)
+      try {
+        await apiJson('/api/claude/send', {
+          method: 'POST',
+          // A human typed this, so it goes out even while automatic replies are paused.
+          body: JSON.stringify({ to: head.chatJid, text: draft, force: true }),
+        })
+      } catch (e) {
+        toast.error(`Send failed: ${e instanceof Error ? e.message : String(e)}`)
+        return
+      }
+      // Sent from here on: never say "failed" (a retry would message the contact twice).
+      const sent = `Sent ${parts.length} message${parts.length === 1 ? '' : 's'} to ${chatTitle(head)}`
       setDraft('')
+      try {
+        await ack()
+        toast.success(sent)
+        onDone()
+      } catch (e) {
+        toast.warning(
+          `${sent}, but it could not be marked handled (${e instanceof Error ? e.message : String(e)}). Use Stay silent to clear it — do not send again.`,
+        )
+      }
       void refresh()
-      onDone()
-    } catch (e) {
-      toast.error(`Send failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       inFlight.current = false
       setBusy(false)
