@@ -31,18 +31,54 @@ describe("applyConfigPatch", () => {
     expect(rejectedKeys).toEqual([]);
   });
 
-  test("rejects unknown keys and wrong types; normalises enums and bounds", () => {
+  test("rejects unknown keys, wrong types, unknown enum members and out-of-bounds numbers", () => {
     const { config, rejectedKeys } = applyConfigPatch(base, {
       notAKey: 1,
       dailyMessageLimit: "lots",
       directChatMode: "everyone",
       toolLoopMaxSteps: 99
     });
-    expect(rejectedKeys.sort()).toEqual(["dailyMessageLimit", "notAKey"]);
+    // BUG-10: values normalisation would replace are reported, and the current value is kept.
+    expect(rejectedKeys.sort()).toEqual(["dailyMessageLimit", "directChatMode", "notAKey", "toolLoopMaxSteps"]);
     expect(config.dailyMessageLimit).toBe(base.dailyMessageLimit);
-    expect(config.directChatMode).toBe("allowlist");
-    expect(config.toolLoopMaxSteps).toBe(8);
+    expect(config.directChatMode).toBe(base.directChatMode);
+    expect(config.toolLoopMaxSteps).toBe(base.toolLoopMaxSteps);
     expect("notAKey" in config).toBe(false);
+  });
+});
+
+describe("applyConfigPatch value validation (BUG-09, BUG-10)", () => {
+  test("an invalid enum member keeps the current value instead of resetting to the default", () => {
+    const current = { ...base, directChatMode: "all" as const };
+    const { config, rejectedKeys } = applyConfigPatch(current, { directChatMode: "ALL" });
+    expect(rejectedKeys).toEqual(["directChatMode"]);
+    expect(config.directChatMode).toBe("all");
+  });
+
+  test("negative, zero, fractional and non-finite windows/limits are rejected", () => {
+    const { config, rejectedKeys } = applyConfigPatch(base, {
+      historyWindow: -3,
+      senderHistoryWindow: 0,
+      memoryTopK: 0.5,
+      dailyMessageLimit: -5,
+      selfChatDigestHour: 24
+    });
+    expect(rejectedKeys.sort()).toEqual(["dailyMessageLimit", "historyWindow", "memoryTopK", "selfChatDigestHour", "senderHistoryWindow"]);
+    expect(config.historyWindow).toBe(base.historyWindow);
+    expect(config.dailyMessageLimit).toBe(base.dailyMessageLimit);
+  });
+
+  test("min reply delay above max is rejected; valid values still apply", () => {
+    const bad = applyConfigPatch(base, { minReplyDelayMs: 9_000, maxReplyDelayMs: 1 });
+    expect(bad.rejectedKeys.sort()).toEqual(["maxReplyDelayMs", "minReplyDelayMs"]);
+    expect(bad.config.minReplyDelayMs).toBeLessThanOrEqual(bad.config.maxReplyDelayMs);
+    const ok = applyConfigPatch(base, { historyWindow: 30, dailyMessageLimit: 0, minReplyDelayMs: 100, maxReplyDelayMs: 200 });
+    expect(ok.rejectedKeys).toEqual([]);
+    expect([ok.config.historyWindow, ok.config.dailyMessageLimit, ok.config.minReplyDelayMs]).toEqual([30, 0, 100]);
+  });
+
+  test("echoing back the whole current config still reports nothing", () => {
+    expect(applyConfigPatch(base, { ...base }).rejectedKeys).toEqual([]);
   });
 });
 
