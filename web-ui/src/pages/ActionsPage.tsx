@@ -152,7 +152,9 @@ export function ActionsPage() {
     }
     setSavingModel(true)
     try {
-      const body: TalkyConfig = { ...config, model: selectedModelId }
+      // Only the model: posting the last-polled config would revert newer changes
+      // (e.g. un-pause replies or flip the engine back).
+      const body: Partial<TalkyConfig> = { model: selectedModelId }
       const res = await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
