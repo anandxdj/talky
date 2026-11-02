@@ -109,10 +109,29 @@ describe("parseTextToolCalls", () => {
     expect(parseTextToolCalls("just chatting, no tools")).toEqual([]);
   });
 
-  test("known limitation: a ')' inside a quoted arg truncates the call", () => {
+  // BUG-K4: this used to parse as { query: "'happy (dance" } and leave "')" in the reply text.
+  test("a ')' inside a quoted arg stays in the argument", () => {
     expect(parseTextToolCalls("send_gif(query='happy (dance)')")).toEqual([
-      { name: "send_gif", args: { query: "'happy (dance" } }
+      { name: "send_gif", args: { query: "happy (dance)" } }
     ]);
+    expect(parseTextToolCalls('send_styled_quote_card(text="a) b", style=dark) then send_sticker()')).toEqual([
+      { name: "send_styled_quote_card", args: { text: "a) b", style: "dark" } },
+      { name: "send_sticker", args: {} }
+    ]);
+  });
+
+  test("an unclosed quote is treated literally (apostrophes in unquoted args still parse)", () => {
+    expect(parseTextToolCalls("send_gif(query=don't stop)")).toEqual([
+      { name: "send_gif", args: { query: "don't stop" } }
+    ]);
+  });
+
+  test("no catastrophic backtracking on hostile incoming text", () => {
+    const hostile = `send_gif(${"'a".repeat(20_000)}`;
+    const started = performance.now();
+    expect(parseTextToolCalls(hostile)).toEqual([]);
+    stripParsedToolCallText(hostile);
+    expect(performance.now() - started).toBeLessThan(500);
   });
 });
 
@@ -146,6 +165,10 @@ describe("stripParsedToolCallText", () => {
         'ok `send_gif(query=\'x\')` done\n```tool_outputs {"a":1}```  bye ```json {"k": 2}```'
       )
     ).toBe("ok done bye");
+  });
+
+  test("strips a call whose quoted arg contains ')' completely (BUG-K4)", () => {
+    expect(stripParsedToolCallText("haha send_gif(query='happy (dance)') enjoy")).toBe("haha enjoy");
   });
 
   test("leaves normal text untouched (compacted)", () => {
