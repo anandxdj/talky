@@ -48,8 +48,9 @@ export function buildDirectIdentifiers(
   if (!raw) return values;
 
   values.add(raw);
+  // jidNormalizedUser returns "" for non-JID input; adding "" made any two non-JIDs "match".
   const normalized = jidNormalizedUser(raw).toLowerCase();
-  values.add(normalized);
+  if (normalized) values.add(normalized);
 
   const userPart = normalized.split("@")[0];
   if (userPart) {

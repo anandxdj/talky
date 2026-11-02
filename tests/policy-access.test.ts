@@ -63,6 +63,18 @@ describe("buildDirectIdentifiers", () => {
   test("empty input yields no identifiers", () => {
     expect(buildDirectIdentifiers("   ", lidLookup).size).toBe(0);
   });
+
+  test("non-JID input never yields an empty identifier (BUG-K8)", () => {
+    expect(buildDirectIdentifiers("alice", noLidMapping).has("")).toBe(false);
+    expect([...buildDirectIdentifiers("alice", noLidMapping)]).toEqual(["alice"]);
+  });
+});
+
+describe("isDirectJidAllowed — non-JID entries (BUG-K8)", () => {
+  test("two different non-JIDs do not match each other", () => {
+    expect(isDirectJidAllowed("alice", ["bob"], noLidMapping)).toBe(false);
+    expect(isDirectJidAllowed("alice", ["alice"], noLidMapping)).toBe(true);
+  });
 });
 
 describe("isDirectJidAllowed", () => {
