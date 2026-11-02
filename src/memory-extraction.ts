@@ -55,7 +55,9 @@ export async function classifyMessageForMemory(
     const parsed = tryParseJsonObject(out);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
     const rec = parsed as Record<string, unknown>;
-    const store = Boolean(rec.store);
+    // Models sometimes answer "store": "false"; Boolean("false") is true. Only true / "true" store.
+    const store =
+      rec.store === true || (typeof rec.store === "string" && rec.store.trim().toLowerCase() === "true");
     const conf = typeof rec.confidence === "number" ? rec.confidence : 0.55;
     const factRaw = rec.fact;
     const fact =
