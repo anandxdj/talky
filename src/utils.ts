@@ -41,3 +41,39 @@ export function jaccardTokenSimilarity(a: string, b: string): number {
   const union = ta.size + tb.size - overlap;
   return union === 0 ? 0 : overlap / union;
 }
+
+export function previewText(value: string, maxLength = 120): string {
+  const compact = compactText(value);
+  if (compact.length <= maxLength) return compact;
+  return `${compact.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+export function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+export function clampFloat(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
+// WAMessage.messageTimestamp is either a number (seconds) or a protobuf Long.
+// Returns unix seconds or null when the value is missing/unparseable.
+export function extractMessageTimestampSeconds(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number" && Number.isFinite(value)) return Math.floor(value);
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.floor(parsed) : null;
+  }
+  if (typeof value === "object") {
+    const maybe = value as { toNumber?: () => number; low?: number; high?: number };
+    if (typeof maybe.toNumber === "function") {
+      const n = maybe.toNumber();
+      return Number.isFinite(n) ? Math.floor(n) : null;
+    }
+    if (typeof maybe.low === "number") return Math.floor(maybe.low);
+  }
+  return null;
+}

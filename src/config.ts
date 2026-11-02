@@ -185,6 +185,14 @@ export function loadConfig(): AppConfig {
 
   const raw = readFileSync(CONFIG_PATH, "utf-8");
   const parsed = YAML.parse(raw) as Partial<AppConfig> | undefined;
+  return normalizeConfig(parsed);
+}
+
+/**
+ * Single source of truth for config validation: fills defaults and coerces/clamps every
+ * field. Used for both `config.yaml` and config patches coming from the web API.
+ */
+export function normalizeConfig(parsed: Partial<AppConfig> | undefined): AppConfig {
   return {
     ...defaultConfig,
     ...(parsed ?? {}),
@@ -214,12 +222,14 @@ export function loadConfig(): AppConfig {
       typeof parsed?.proactiveOnStartupEnabled === "boolean"
         ? parsed.proactiveOnStartupEnabled
         : defaultConfig.proactiveOnStartupEnabled,
-    proactiveOnStartupDirectJids:
-      parsed?.proactiveOnStartupDirectJids ?? defaultConfig.proactiveOnStartupDirectJids,
-    selfSenderJids: parsed?.selfSenderJids ?? defaultConfig.selfSenderJids,
-    allowedGroupJids: parsed?.allowedGroupJids ?? defaultConfig.allowedGroupJids,
-    mutedGroupJids: parsed?.mutedGroupJids ?? defaultConfig.mutedGroupJids,
-    allowedDirectJids: parsed?.allowedDirectJids ?? defaultConfig.allowedDirectJids,
+    proactiveOnStartupDirectJids: jidList(
+      parsed?.proactiveOnStartupDirectJids,
+      defaultConfig.proactiveOnStartupDirectJids
+    ),
+    selfSenderJids: jidList(parsed?.selfSenderJids, defaultConfig.selfSenderJids),
+    allowedGroupJids: jidList(parsed?.allowedGroupJids, defaultConfig.allowedGroupJids),
+    mutedGroupJids: jidList(parsed?.mutedGroupJids, defaultConfig.mutedGroupJids),
+    allowedDirectJids: jidList(parsed?.allowedDirectJids, defaultConfig.allowedDirectJids),
     selfChatEnabled:
       typeof parsed?.selfChatEnabled === "boolean"
         ? parsed.selfChatEnabled
@@ -328,12 +338,7 @@ export function loadConfig(): AppConfig {
       typeof parsed?.claudeMediatorExclusive === "boolean"
         ? parsed.claudeMediatorExclusive
         : defaultConfig.claudeMediatorExclusive,
-    claudeMediatorChats: Array.isArray(parsed?.claudeMediatorChats)
-      ? parsed.claudeMediatorChats
-          .filter((entry): entry is string => typeof entry === "string")
-          .map((entry) => entry.trim())
-          .filter(Boolean)
-      : defaultConfig.claudeMediatorChats,
+    claudeMediatorChats: jidList(parsed?.claudeMediatorChats, defaultConfig.claudeMediatorChats),
     claudeTriggerCommand:
       typeof parsed?.claudeTriggerCommand === "string"
         ? parsed.claudeTriggerCommand.trim()
@@ -345,6 +350,49 @@ export function loadConfig(): AppConfig {
       3_600
     )
   };
+}
+
+/** Keys that may never be changed over HTTP (they can execute commands or widen file access). */
+export const API_LOCKED_CONFIG_KEYS: ReadonlySet<string> = new Set<keyof AppConfig>([
+  "claudeTriggerCommand",
+  "localFileAllowedRoots",
+  "localFileBlockedExtensions",
+  "localFileBlockedPathFragments",
+  "stickerPackDir"
+]);
+
+/**
+ * Validate a partial config coming from the web API: unknown keys and locked keys are
+ * rejected (reported, not applied); the merged result is normalised like `config.yaml`.
+ */
+export function applyConfigPatch(
+  current: AppConfig,
+  patch: Record<string, unknown>
+): { config: AppConfig; rejectedKeys: string[] } {
+  const rejectedKeys: string[] = [];
+  const accepted: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (!Object.prototype.hasOwnProperty.call(defaultConfig, key) || API_LOCKED_CONFIG_KEYS.has(key)) {
+      rejectedKeys.push(key);
+      continue;
+    }
+    const expected = typeof (defaultConfig as Record<string, unknown>)[key];
+    const isArray = Array.isArray((defaultConfig as Record<string, unknown>)[key]);
+    if (isArray ? !Array.isArray(value) : typeof value !== expected) {
+      rejectedKeys.push(key);
+      continue;
+    }
+    accepted[key] = value;
+  }
+  // Locked keys keep their current value even if the patch tried to set them.
+  const lockedNow: Record<string, unknown> = {};
+  for (const key of API_LOCKED_CONFIG_KEYS) lockedNow[key] = (current as Record<string, unknown>)[key];
+  const config = normalizeConfig({ ...current, ...accepted, ...lockedNow } as Partial<AppConfig>);
+  return { config, rejectedKeys: rejectedKeys.filter((key) => {
+    // Unchanged locked values sent back by the UI are not an error.
+    if (!API_LOCKED_CONFIG_KEYS.has(key)) return true;
+    return JSON.stringify(patch[key]) !== JSON.stringify((current as Record<string, unknown>)[key]);
+  }) };
 }
 
 export function saveConfig(config: AppConfig): void {
@@ -426,6 +474,23 @@ export function repairWhatsAppSessionState(): { deleted: number; deletedFiles: s
   }
 
   return { deleted: deletedFiles.length, deletedFiles };
+}
+
+/**
+ * JID / phone lists. YAML turns an unquoted `- 919876543210` into a number, which used to
+ * crash access checks (`.trim is not a function`), so numbers are converted to strings.
+ */
+function jidList(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) return fallback;
+  return value
+    .map((entry) =>
+      typeof entry === "number" && Number.isFinite(entry)
+        ? String(Math.trunc(entry))
+        : typeof entry === "string"
+          ? entry.trim()
+          : ""
+    )
+    .filter(Boolean);
 }
 
 function nonEmptyStringArray(value: unknown, fallback: string[]): string[] {

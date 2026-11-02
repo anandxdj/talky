@@ -5,8 +5,7 @@ import makeWASocket, {
   jidNormalizedUser,
   useMultiFileAuthState
 } from "baileys";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
@@ -20,7 +19,6 @@ import {
 } from "./claude-bridge";
 import {
   AUTH_DIR,
-  DATA_DIR,
   loadConfig,
   resetTalkyRuntimeState,
   resetWhatsAppAuth
@@ -47,7 +45,7 @@ import {
   type GeminiConversationContent,
   type GeminiTextPart
 } from "./gemini";
-import { KlipyClient } from "./klipy";
+import { KlipyClient, normalizeKlipyLocale, toKlipyCustomerId } from "./klipy";
 import { decideReply } from "./decision";
 import { buildReplySystemPrompt } from "./prompts";
 import {
@@ -57,201 +55,72 @@ import {
   ensurePersonaScaffold,
   loadPersonaContext
 } from "./persona";
-import { classifyMessageForMemory } from "./memory-extraction";
+import { classifyMessageForMemory, inferMemoryFact } from "./memory-extraction";
 import { buildToolDeclarations, executeToolCall, type ToolRuntimeContext } from "./tool-executor";
 import { appendToolActionLog } from "./tools";
-import { compactText, randomBetween, sleep } from "./utils";
+import {
+  clampFloat,
+  clampInt,
+  compactText,
+  extractMessageTimestampSeconds,
+  previewText,
+  randomBetween,
+  sleep
+} from "./utils";
 import { createEmbeddingProvider, type EmbeddingProvider } from "./embeddings";
 import { Summarizer } from "./summarizer";
 import { SelfChatAssistant } from "./self-chat";
-import { normalizeJidInput } from "./jid";
+import { buildMediaSendTargets, shouldIgnoreIncomingJid, toDirectTargetJid } from "./jid";
 import { transcribeAudio } from "./transcribe";
-import { lidDigitsForPhone, phoneDigitsForLid } from "./lid-map";
 import { Scheduler } from "./scheduler";
 import { VoiceboxClient } from "./voice/voicebox-client";
+import { fetchJoinedGroups } from "./whatsapp-cli";
 import {
   installConsoleNoiseFilter,
+  installKnownConsoleNoiseFilter,
   wrapLoggerWithNoiseFilter,
   type NoiseLogger
 } from "./log-noise-filter";
+import { ANSI_AI, ANSI_DIM, ANSI_ME, ANSI_RESET, colorForActor, shortActorLabel } from "./log-format";
+import { boomErrorText, boomHttpStatus, stringifyErrorForLog } from "./errors";
+import {
+  guessMimeTypeFromPath,
+  isAudioExt,
+  isImageExt,
+  isVideoExt,
+  normalizeGeminiInlineMimeType
+} from "./media/mime";
+import { collectStickerFiles } from "./media/stickers";
+import { buildPollinationsImageUrl, defaultImageCaption } from "./media/image";
+import {
+  DEFAULT_GEMINI_TTS_MODEL,
+  buildGeminiMultiSpeakerPrompt,
+  buildGeminiSingleSpeakerPrompt,
+  normalizeGeminiTtsVoice,
+  normalizeTtsLanguage,
+  prepareGeminiTtsAudioForWhatsApp,
+  transcodeAudioToOggOpus
+} from "./media/tts-audio";
+import {
+  normalizeReplyOutput,
+  parseTextToolCalls,
+  splitMediatedText,
+  splitReplyOutputToMessages,
+  stripParsedToolCallText
+} from "./reply/parse";
+import {
+  defaultExplicitVoiceReplyText,
+  extractNarratedGifQuery,
+  isExplicitVoiceToolIntent,
+  isToolListIntent
+} from "./reply/intents";
+import { evaluateChatPolicy, isDirectJidAllowed, shouldMediateChat } from "./policy/access";
 
 installConsoleNoiseFilter();
+installKnownConsoleNoiseFilter();
 
 type BaileysMessage = any;
 type BaileysSocket = any;
-
-const KNOWN_LIBSIGNAL_CONSOLE_NOISE: RegExp[] = [
-  /^closing stale open session for new outgoing prekey bundle\b/i,
-  /^closing open session for new outgoing prekey bundle\b/i,
-  /^closing open session in favor of incoming prekey bundle\b/i,
-  /^closing session\b/i,
-  /^removing old closed session\b/i
-];
-
-let consoleNoiseFilterInstalled = false;
-
-function normalizeConsoleArg(arg: unknown): string {
-  if (typeof arg === "string") return arg;
-  if (arg instanceof Error) return `${arg.name}: ${arg.message}`;
-  if (arg === null || arg === undefined) return "";
-  if (typeof arg === "object") {
-    return (arg as { constructor?: { name?: string } }).constructor?.name ?? "";
-  }
-  return String(arg);
-}
-
-function shouldSuppressKnownLibsignalConsoleNoise(args: unknown[]): boolean {
-  const normalized = args
-    .map((arg) => normalizeConsoleArg(arg))
-    .map((part) => part.replace(/\s+/g, " ").trim())
-    .filter((part) => part.length > 0);
-  if (normalized.length === 0) return false;
-
-  for (const part of normalized) {
-    if (KNOWN_LIBSIGNAL_CONSOLE_NOISE.some((pattern) => pattern.test(part))) {
-      return true;
-    }
-  }
-
-  const combined = normalized.join(" ").replace(/\s+/g, " ").trim();
-  return KNOWN_LIBSIGNAL_CONSOLE_NOISE.some((pattern) => pattern.test(combined));
-}
-
-function installKnownConsoleNoiseFilter(): void {
-  if (consoleNoiseFilterInstalled) return;
-  consoleNoiseFilterInstalled = true;
-
-  const wrap = (original: (...args: unknown[]) => void) => {
-    return (...args: unknown[]) => {
-      if (shouldSuppressKnownLibsignalConsoleNoise(args)) return;
-      original(...args);
-    };
-  };
-
-  console.log = wrap(console.log.bind(console));
-  console.info = wrap(console.info.bind(console));
-  console.debug = wrap(console.debug.bind(console));
-  console.trace = wrap(console.trace.bind(console));
-  console.warn = wrap(console.warn.bind(console));
-  console.error = wrap(console.error.bind(console));
-}
-
-installKnownConsoleNoiseFilter();
-
-const ANSI_RESET = "\u001b[0m";
-const ANSI_DIM = "\u001b[90m";
-const ANSI_AI = "\u001b[36m";
-const ANSI_ME = "\u001b[32m";
-const ACTOR_COLORS = [
-  "\u001b[38;5;39m",
-  "\u001b[38;5;45m",
-  "\u001b[38;5;81m",
-  "\u001b[38;5;111m",
-  "\u001b[38;5;149m",
-  "\u001b[38;5;208m",
-  "\u001b[38;5;214m",
-  "\u001b[38;5;177m"
-];
-const DEFAULT_GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts";
-const GEMINI_TTS_VOICES = [
-  "Zephyr",
-  "Puck",
-  "Charon",
-  "Kore",
-  "Fenrir",
-  "Leda",
-  "Orus",
-  "Aoede",
-  "Callirrhoe",
-  "Autonoe",
-  "Enceladus",
-  "Iapetus",
-  "Umbriel",
-  "Algieba",
-  "Despina",
-  "Erinome",
-  "Algenib",
-  "Rasalgethi",
-  "Laomedeia",
-  "Achernar",
-  "Alnilam",
-  "Schedar",
-  "Gacrux",
-  "Pulcherrima",
-  "Achird",
-  "Zubenelgenubi",
-  "Vindemiatrix",
-  "Sadachbia",
-  "Sadaltager",
-  "Sulafat"
-] as const;
-const GEMINI_TTS_VOICE_LOOKUP = new Map(
-  GEMINI_TTS_VOICES.map((voice) => [voice.toLowerCase(), voice])
-);
-const TTS_TMP_DIR = path.join(DATA_DIR, "tmp", "tts");
-
-function hashText(input: string): number {
-  let hash = 0;
-  for (let i = 0; i < input.length; i += 1) {
-    hash = (hash * 31 + input.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash);
-}
-
-function colorForActor(actorId: string): string {
-  return ACTOR_COLORS[hashText(actorId) % ACTOR_COLORS.length] ?? "";
-}
-
-function shortActorLabel(actorId: string): string {
-  const normalized = jidNormalizedUser(actorId);
-  const user = normalized.split("@")[0] ?? normalized;
-  if (user.length <= 14) return user;
-  return `${user.slice(0, 6)}...${user.slice(-4)}`;
-}
-
-function previewText(value: string, maxLength = 120): string {
-  const compact = compactText(value);
-  if (compact.length <= maxLength) return compact;
-  return `${compact.slice(0, Math.max(0, maxLength - 3))}...`;
-}
-
-function shouldIgnoreIncomingJid(jid?: string | null): boolean {
-  if (!jid) return false;
-  return (
-    jid === "status@broadcast" ||
-    jid.endsWith("@broadcast") ||
-    jid.endsWith("@newsletter")
-  );
-}
-
-/** Boom / Baileys errors often put the real HTTP code in `data` (e.g. 429) while `output.statusCode` is 500. */
-function boomHttpStatus(error: unknown): number | undefined {
-  if (!error || typeof error !== "object") return undefined;
-  const b = error as { data?: unknown; output?: { statusCode?: unknown } };
-  if (typeof b.data === "number" && b.data >= 400 && b.data < 600) return b.data;
-  const sc = b.output?.statusCode;
-  if (typeof sc === "number" && sc >= 400 && sc < 600) return sc;
-  return undefined;
-}
-
-function boomErrorText(error: unknown): string {
-  if (error == null) return "";
-  if (typeof error === "string") return error;
-  if (typeof error === "object") {
-    const e = error as {
-      message?: string;
-      output?: { payload?: { message?: string }; statusCode?: number };
-    };
-    const p = e.output?.payload;
-    const parts = [
-      e.message,
-      typeof p?.message === "string" ? p.message : undefined,
-      e.output?.statusCode !== undefined ? String(e.output.statusCode) : undefined
-    ].filter(Boolean);
-    if (parts.length) return parts.join(" ");
-  }
-  return String(error);
-}
 
 export class WhatsAppAgent {
   private readonly logger: ReturnType<typeof pino>;
@@ -424,7 +293,9 @@ export class WhatsAppAgent {
         if (!this.schedulerStarted) {
           this.schedulerStarted = true;
           this.scheduler.start();
-          void this.memory.ensureReady().catch(() => undefined);
+          void this.memory.ensureReady().catch((error) => {
+            this.logger.debug({ err: stringifyErrorForLog(error) }, "memory warm-up failed");
+          });
         }
         if (!this.proactiveStartupTriggered) {
           this.proactiveStartupTriggered = true;
@@ -583,8 +454,9 @@ export class WhatsAppAgent {
         if (lidJid.endsWith("@lid")) {
           this.ownLidHintJid = jidNormalizedUser(lidJid);
         }
-      } catch {
+      } catch (error) {
         // optional; config selfSenderJids still works
+        this.logger.debug({ err: stringifyErrorForLog(error) }, "own LID hint lookup failed");
       }
     })();
   }
@@ -600,38 +472,13 @@ export class WhatsAppAgent {
     allowed: boolean;
     reason: string;
   } {
-    if (isGroup) {
-      if (this.config.mutedGroupJids.includes(chatJid)) {
-        return { allowed: false, reason: "group is muted" };
-      }
-      if (this.config.allowedGroupJids.length === 0) {
-        return { allowed: true, reason: "group allowed (no allowlist configured)" };
-      }
-      const allowed = isGroupJidAllowed(chatJid, this.config.allowedGroupJids);
-      return {
-        allowed,
-        reason: allowed
-          ? "group matched allowlist"
-          : "group not in allowedGroupJids"
-      };
-    }
-    // Self-chat (notebook): allow when enabled and DM peer matches any linked identity (@s.whatsapp.net / @lid / selfSenderJids).
-    if (this.config.selfChatEnabled && this.ownJid.length > 0 && this.isSelfSenderJid(chatJid)) {
-      return { allowed: true, reason: "self-chat allowed (selfChatEnabled=true)" };
-    }
-    if (this.config.directChatMode === "none") {
-      return { allowed: false, reason: "directChatMode=none" };
-    }
-    if (this.config.directChatMode === "all") {
-      return { allowed: true, reason: "directChatMode=all" };
-    }
-    const allowed = isDirectJidAllowed(chatJid, this.config.allowedDirectJids);
-    return {
-      allowed,
-      reason: allowed
-        ? "direct matched allowlist"
-        : `direct not in allowlist (mode=allowlist, allowlistSize=${this.config.allowedDirectJids.length})`
-    };
+    return evaluateChatPolicy({
+      config: this.config,
+      chatJid,
+      isGroup,
+      ownJid: this.ownJid,
+      isSelfChatPeer: (jid) => this.isSelfSenderJid(jid)
+    });
   }
 
   private canSendMoreToday(): boolean {
@@ -745,13 +592,14 @@ export class WhatsAppAgent {
     try {
       try {
         await this.sock?.logout();
-      } catch {
+      } catch (error) {
         /* socket may already be dead */
+        this.logger.debug({ err: stringifyErrorForLog(error) }, "logout before reset failed");
       }
       try {
         this.sock?.end(undefined);
-      } catch {
-        /* noop */
+      } catch (error) {
+        this.logger.debug({ err: stringifyErrorForLog(error) }, "socket end before reset failed");
       }
       this.sock = null;
       this.ownJid = "";
@@ -787,13 +635,14 @@ export class WhatsAppAgent {
     try {
       try {
         await this.sock?.logout();
-      } catch {
+      } catch (error) {
         /* socket may already be dead */
+        this.logger.debug({ err: stringifyErrorForLog(error) }, "logout before reset failed");
       }
       try {
         this.sock?.end(undefined);
-      } catch {
-        /* noop */
+      } catch (error) {
+        this.logger.debug({ err: stringifyErrorForLog(error) }, "socket end before reset failed");
       }
       this.sock = null;
       this.ownJid = "";
@@ -2905,8 +2754,12 @@ export class WhatsAppAgent {
           raw,
           context.senderJid
         );
-      } catch {
+      } catch (sendError) {
         // nothing we can do
+        this.logger.debug(
+          { err: stringifyErrorForLog(sendError) },
+          "failed to report self-chat error back to chat"
+        );
       }
       return true;
     }
@@ -2967,12 +2820,7 @@ export class WhatsAppAgent {
   }
 
   private shouldMediateWithClaude(chatJid: string): boolean {
-    if (!this.config.claudeMediatorEnabled) return false;
-    const filter = this.config.claudeMediatorChats;
-    if (filter.length === 0) return true;
-    if (chatJid.endsWith("@g.us")) return isGroupJidAllowed(chatJid, filter);
-    // LID-aware: a filter entry in either phone or @lid form matches both.
-    return isDirectJidAllowed(chatJid, filter);
+    return shouldMediateChat(this.config, chatJid);
   }
 
   /** Persist media, optionally transcribe audio with Gemini, enqueue the event, and fire trigger. */
@@ -3059,11 +2907,7 @@ export class WhatsAppAgent {
   ): Promise<{ jid: string; parts: number }> {
     if (!this.sock) throw new Error("WhatsApp socket not connected");
     const jid = toDirectTargetJid(targetInput);
-    const chunks = text
-      .split("|||")
-      .map((part) => compactText(part))
-      .filter((part) => part.length > 0)
-      .slice(0, 5);
+    const chunks = splitMediatedText(text);
     if (chunks.length === 0) throw new Error("text is empty");
     if (jid.endsWith("@g.us")) {
       const permission = await this.checkGroupSendPermission(jid);
@@ -3123,7 +2967,15 @@ export class WhatsAppAgent {
       if (trimmed) scopes.add(trimmed);
     }
     const batches = await Promise.all(
-      [...scopes].map((scope) => this.memory.retrieve(scope, query, limit).catch(() => []))
+      [...scopes].map((scope) =>
+        this.memory.retrieve(scope, query, limit).catch((error): MemoryItem[] => {
+          this.logger.debug(
+            { err: stringifyErrorForLog(error), scope },
+            "owner memory retrieval failed for scope"
+          );
+          return [];
+        })
+      )
     );
     const seen = new Set<string>();
     const merged: MemoryItem[] = [];
@@ -3137,1009 +2989,10 @@ export class WhatsAppAgent {
   }
 }
 
-function stringifyErrorForLog(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
-
-function collectStickerFiles(rootDir: string, maxDepth: number, maxFiles: number): string[] {
-  const files: string[] = [];
-  const queue: Array<{ dir: string; depth: number }> = [{ dir: rootDir, depth: 0 }];
-
-  while (queue.length > 0 && files.length < maxFiles) {
-    const current = queue.shift();
-    if (!current) break;
-
-    for (const entry of readdirSync(current.dir)) {
-      const absolute = path.join(current.dir, entry);
-      const isDir = lstatSync(absolute).isDirectory();
-      if (isDir) {
-        if (current.depth < maxDepth) {
-          queue.push({ dir: absolute, depth: current.depth + 1 });
-        }
-        continue;
-      }
-      if (path.extname(absolute).toLowerCase() === ".webp") {
-        files.push(absolute);
-      }
-      if (files.length >= maxFiles) break;
-    }
-  }
-
-  return files;
-}
-
-function guessMimeTypeFromPath(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
-  switch (ext) {
-    case ".pdf":
-      return "application/pdf";
-    case ".txt":
-      return "text/plain";
-    case ".md":
-      return "text/markdown";
-    case ".json":
-      return "application/json";
-    case ".csv":
-      return "text/csv";
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".webp":
-      return "image/webp";
-    case ".gif":
-      return "image/gif";
-    case ".mp4":
-      return "video/mp4";
-    default:
-      return "application/octet-stream";
-  }
-}
-
-function isImageExt(ext: string): boolean {
-  return [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"].includes(ext);
-}
-
-function isVideoExt(ext: string): boolean {
-  return [".mp4", ".mov", ".mkv", ".webm"].includes(ext);
-}
-
-function isAudioExt(ext: string): boolean {
-  return [".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac"].includes(ext);
-}
-
-function normalizeGeminiInlineMimeType(mimeType: string): string {
-  const raw = compactText(mimeType).toLowerCase();
-  if (!raw) return "application/octet-stream";
-  const base = raw.split(";")[0]?.trim() ?? raw;
-  if (!base) return "application/octet-stream";
-  if (base === "audio/opus") return "audio/ogg";
-  return base;
-}
-
-function isExplicitVoiceToolIntent(input: string): boolean {
-  const text = compactText(input).toLowerCase();
-  if (!text) return false;
-
-  if (text.includes("send_voice_reply") || text.includes("end_voice_reply")) {
-    return true;
-  }
-
-  return (
-    /voice\s*(msg|message|note)/.test(text) ||
-    /voice\s*reply/.test(text) ||
-    /tool\s*call.*voice/.test(text) ||
-    /voice.*tool\s*call/.test(text)
-  );
-}
-
-function defaultExplicitVoiceReplyText(): string {
-  return "Ami voice-e reply dicchi, bolo ki niye kotha bolbo.";
-}
-
-function buildMediaSendTargets(chatJid: string): string[] {
-  const targets = new Set<string>();
-  targets.add(chatJid);
-
-  if (chatJid.endsWith("@g.us")) {
-    return [...targets];
-  }
-
-  const user = compactText(chatJid.split("@")[0] ?? "");
-  if (!user) {
-    return [...targets];
-  }
-
-  if (chatJid.endsWith("@lid")) {
-    targets.add(`${user}@s.whatsapp.net`);
-  } else if (chatJid.endsWith("@s.whatsapp.net")) {
-    targets.add(`${user}@lid`);
-  }
-
-  return [...targets];
-}
-
-function parseTextToolCalls(
-  text: string
-): Array<{ id?: string; name: string; args: Record<string, unknown> }> {
-  if (!text) return [];
-
-  const allowedNames = new Set([
-    "list_available_tools",
-    "list_local_files",
-    "read_local_file",
-    "share_local_file",
-    "send_sticker",
-    "send_gif",
-    "send_klipy_gif",
-    "send_voice_reply",
-    "end_voice_reply",
-    "send_image_reply",
-    "send_meme_reply",
-    "send_styled_quote_card",
-    "send_voice_plus_text",
-    "send_reaction_combo"
-  ]);
-
-  const calls: Array<{ id?: string; name: string; args: Record<string, unknown> }> = [];
-  const pattern =
-    /(?:default_api\.)?(list_available_tools|list_local_files|read_local_file|share_local_file|send_sticker|send_gif|send_klipy_gif|send_voice_reply|end_voice_reply|send_image_reply|send_meme_reply|send_styled_quote_card|send_voice_plus_text|send_reaction_combo)\s*\(([^)]*)\)/gim;
-
-  let match: RegExpExecArray | null = null;
-  while ((match = pattern.exec(text)) !== null) {
-    const name = compactText(match[1] ?? "");
-    if (!name || !allowedNames.has(name)) continue;
-    const rawArgs = match[2] ?? "";
-    calls.push({
-      name,
-      args: parseTextToolArgs(rawArgs)
-    });
-  }
-
-  return calls;
-}
-
-function parseTextToolArgs(raw: string): Record<string, unknown> {
-  const args: Record<string, unknown> = {};
-  const input = compactText(raw);
-  if (!input) return args;
-
-  const keyValuePattern =
-    /([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*('(?:\\'|[^'])*'|"(?:\\"|[^"])*"|`(?:\\`|[^`])*`|[^,]+)(?:,|$)/g;
-
-  let match: RegExpExecArray | null = null;
-  while ((match = keyValuePattern.exec(raw)) !== null) {
-    const key = compactText(match[1] ?? "");
-    const valueRaw = compactText(match[2] ?? "");
-    if (!key) continue;
-    args[key] = parseTextToolArgValue(valueRaw);
-  }
-
-  if (Object.keys(args).length === 0 && input) {
-    args.path = parseTextToolArgValue(input);
-  }
-
-  return args;
-}
-
-function parseTextToolArgValue(raw: string): unknown {
-  const value = compactText(raw);
-  if (!value) return "";
-
-  const wrappedSingle = value.startsWith("'") && value.endsWith("'");
-  const wrappedDouble = value.startsWith('"') && value.endsWith('"');
-  const wrappedBacktick = value.startsWith("`") && value.endsWith("`");
-  if (wrappedSingle || wrappedDouble || wrappedBacktick) {
-    return value.slice(1, -1);
-  }
-
-  const lowered = value.toLowerCase();
-  if (lowered === "true") return true;
-  if (lowered === "false") return false;
-  if (lowered === "null") return null;
-
-  const asNumber = Number(value);
-  if (Number.isFinite(asNumber)) return asNumber;
-
-  return value;
-}
-
-function stripParsedToolCallText(text: string): string {
-  if (!text) return "";
-  // Strip call-style: send_gif(query='...') or default_api.send_gif(...)
-  let result = text.replace(
-    /`?\s*(?:default_api\.)?(list_available_tools|list_local_files|read_local_file|share_local_file|send_sticker|send_gif|send_klipy_gif|send_voice_reply|end_voice_reply|send_image_reply|send_meme_reply|send_styled_quote_card|send_voice_plus_text|send_reaction_combo)\s*\([^`)]*\)\s*`?/gim,
-    " "
-  );
-  // Strip ```tool_outputs {...}``` blocks that the model sometimes emits in text
-  result = result.replace(/```tool_outputs[\s\S]*?```/gi, " ");
-  // Strip any remaining fenced code block that contains only JSON/dict-like content (tool result blobs)
-  result = result.replace(/```[a-z_]*\s*\{[\s\S]*?\}\s*```/gi, " ");
-  return compactText(result);
-}
-
-function extractNarratedGifQuery(replyText: string, fallbackContext: string): string {
-  const text = compactText(replyText).toLowerCase();
-  if (!text) return "";
-
-  const hasGifWord = /\bgif\b|giphy|tenor|klipy/.test(text);
-  if (!hasGifWord) return "";
-
-  const hasSendIntent =
-    /(send|sending|patha|pathao|pathachi|pathachchi|pathabo|pathaun|bhej|share)/.test(text) ||
-    /(?:i|ami|main)\s+(?:will|can|gonna)\s+send/.test(text);
-  if (!hasSendIntent) return "";
-
-  const fromQuoted = replyText.match(/["'`]{1}([^"'`]{2,80})["'`]{1}/);
-  if (fromQuoted?.[1]) {
-    return deriveGifQuery(fromQuoted[1]);
-  }
-
-  const fallback = compactText(fallbackContext);
-  if (fallback) {
-    return deriveGifQuery(fallback);
-  }
-
-  return "reaction gif";
-}
-
-function deriveGifQuery(source: string): string {
-  const normalized = compactText(source).toLowerCase();
-  if (!normalized) return "reaction gif";
-  return normalized
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 6)
-    .join(" ");
-}
-
-function clampInt(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return min;
-  return Math.min(max, Math.max(min, Math.floor(value)));
-}
-
-function clampFloat(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return min;
-  return Math.min(max, Math.max(min, value));
-}
-
-function normalizeTtsLanguage(value: string | undefined): string {
-  const compact = compactText(value ?? "").toLowerCase();
-  if (!compact) return "en";
-  if (/^[a-z]{2}$/.test(compact)) return compact;
-  if (/^[a-z]{2}[-_][a-z]{2}$/.test(compact)) {
-    return compact.replace("_", "-");
-  }
-  return "en";
-}
-
-function normalizeGeminiTtsVoice(value: string | undefined, fallback: string): string {
-  const compact = compactText(value ?? "").toLowerCase();
-  if (compact) {
-    const matched = GEMINI_TTS_VOICE_LOOKUP.get(compact);
-    if (matched) return matched;
-  }
-
-  const fallbackMatched = GEMINI_TTS_VOICE_LOOKUP.get(fallback.toLowerCase());
-  return fallbackMatched ?? "Kore";
-}
-
-function buildGeminiSingleSpeakerPrompt(args: {
-  transcript: string;
-  language: string;
-  speed: number;
-}): string {
-  return [
-    "Read the transcript exactly as written. Do not add extra words or headings.",
-    `Language: ${args.language}.`,
-    `Pacing: ${toPacingInstruction(args.speed)}.`,
-    "Style: expressive, natural, and conversational.",
-    "TRANSCRIPT:",
-    args.transcript
-  ].join("\n");
-}
-
-function buildGeminiMultiSpeakerPrompt(args: {
-  script: string;
-  speaker1Name: string;
-  speaker2Name: string;
-  language: string;
-  speed: number;
-}): string {
-  const script = ensureSpeakerScript(args.script, args.speaker1Name, args.speaker2Name);
-  return [
-    "Generate two-speaker TTS dialogue exactly from the transcript.",
-    `Speakers are ${args.speaker1Name} and ${args.speaker2Name}.`,
-    `Language: ${args.language}.`,
-    `Pacing: ${toPacingInstruction(args.speed)}.`,
-    "Do not add any narration or extra lines.",
-    "TRANSCRIPT:",
-    script
-  ].join("\n");
-}
-
-function toPacingInstruction(speed: number): string {
-  if (speed <= 0.8) return "slow and calm with clear pauses";
-  if (speed >= 1.3) return "fast and energetic but still intelligible";
-  return "natural conversational pace";
-}
-
-function ensureSpeakerScript(script: string, speaker1Name: string, speaker2Name: string): string {
-  const compact = compactText(script);
-  const speaker1Pattern = new RegExp(`\\b${escapeRegExp(speaker1Name)}\\s*:`, "i");
-  const speaker2Pattern = new RegExp(`\\b${escapeRegExp(speaker2Name)}\\s*:`, "i");
-  if (speaker1Pattern.test(compact) && speaker2Pattern.test(compact)) {
-    return compact;
-  }
-
-  const turns = compact
-    .split(/(?<=[.!?])\s+/)
-    .map((segment) => compactText(segment))
-    .filter(Boolean)
-    .slice(0, 10);
-
-  if (turns.length === 0) {
-    return `${speaker1Name}: ${compact}`;
-  }
-
-  return turns
-    .map((turn, index) => `${index % 2 === 0 ? speaker1Name : speaker2Name}: ${turn}`)
-    .join("\n");
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function wrapPcm16LeAsWav(pcmData: Buffer, sampleRateHz: number): Buffer {
-  const safeRate = clampInt(sampleRateHz, 8_000, 96_000);
-  const channels = 1;
-  const bitsPerSample = 16;
-  const blockAlign = channels * (bitsPerSample / 8);
-  const byteRate = safeRate * blockAlign;
-  const header = Buffer.alloc(44);
-
-  header.write("RIFF", 0, "ascii");
-  header.writeUInt32LE(36 + pcmData.length, 4);
-  header.write("WAVE", 8, "ascii");
-  header.write("fmt ", 12, "ascii");
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(channels, 22);
-  header.writeUInt32LE(safeRate, 24);
-  header.writeUInt32LE(byteRate, 28);
-  header.writeUInt16LE(blockAlign, 32);
-  header.writeUInt16LE(bitsPerSample, 34);
-  header.write("data", 36, "ascii");
-  header.writeUInt32LE(pcmData.length, 40);
-
-  return Buffer.concat([header, pcmData]);
-}
-
-function prepareGeminiTtsAudioForWhatsApp(args: {
-  data: Buffer;
-  mimeType: string;
-  sampleRateHz: number;
-}): {
-  data: Buffer;
-  mimeType: string;
-  ptt: boolean;
-  format: "ogg_opus" | "wav" | "pcm_to_wav" | "audio_generic";
-} {
-  const normalizedMime = compactText(args.mimeType).toLowerCase();
-  const baseMime = normalizedMime.split(";")[0]?.trim() || normalizedMime;
-
-  if (
-    normalizedMime.includes("audio/ogg") ||
-    normalizedMime.includes("audio/opus") ||
-    normalizedMime.includes("codecs=opus")
-  ) {
-    return {
-      data: args.data,
-      mimeType: "audio/ogg; codecs=opus",
-      ptt: true,
-      format: "ogg_opus"
-    };
-  }
-
-  if (
-    baseMime === "audio/wav" ||
-    baseMime === "audio/x-wav" ||
-    baseMime === "audio/wave"
-  ) {
-    return {
-      data: args.data,
-      mimeType: "audio/wav",
-      ptt: false,
-      format: "wav"
-    };
-  }
-
-  if (
-    normalizedMime.includes("audio/pcm") ||
-    normalizedMime.includes("audio/l16") ||
-    normalizedMime.includes("audio/raw") ||
-    normalizedMime.includes("rate=")
-  ) {
-    return {
-      data: wrapPcm16LeAsWav(args.data, args.sampleRateHz),
-      mimeType: "audio/wav",
-      ptt: false,
-      format: "pcm_to_wav"
-    };
-  }
-
-  if (baseMime.startsWith("audio/")) {
-    return {
-      data: args.data,
-      mimeType: baseMime,
-      ptt: false,
-      format: "audio_generic"
-    };
-  }
-
-  return {
-    data: wrapPcm16LeAsWav(args.data, args.sampleRateHz),
-    mimeType: "audio/wav",
-    ptt: false,
-    format: "pcm_to_wav"
-  };
-}
-
-async function transcodeAudioToOggOpus(args: {
-  data: Buffer;
-  mimeType: string;
-  sampleRateHz: number;
-}): Promise<Buffer | null> {
-  const normalizedMime = compactText(args.mimeType).toLowerCase();
-  const baseMime = normalizedMime.split(";")[0]?.trim() || normalizedMime;
-
-  const wavInput =
-    baseMime === "audio/wav" || baseMime === "audio/x-wav" || baseMime === "audio/wave"
-      ? args.data
-      : wrapPcm16LeAsWav(args.data, args.sampleRateHz);
-
-  ensureTtsTempDir();
-  const token = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const inPath = path.join(TTS_TMP_DIR, `in-${token}.wav`);
-  const outPath = path.join(TTS_TMP_DIR, `out-${token}.ogg`);
-
-  try {
-    writeFileSync(inPath, wavInput);
-    const ok = await runFfmpegOpusTranscode(inPath, outPath);
-    if (!ok || !existsSync(outPath)) return null;
-    const ogg = readFileSync(outPath);
-    if (!ogg || ogg.length === 0) return null;
-    return ogg;
-  } catch {
-    return null;
-  } finally {
-    safeRemoveFile(inPath);
-    safeRemoveFile(outPath);
-  }
-}
-
-function ensureTtsTempDir(): void {
-  if (!existsSync(TTS_TMP_DIR)) {
-    mkdirSync(TTS_TMP_DIR, { recursive: true });
-  }
-}
-
-function runFfmpegOpusTranscode(inputWavPath: string, outputOggPath: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const child = spawn(
-      "ffmpeg",
-      [
-        "-y",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        inputWavPath,
-        "-c:a",
-        "libopus",
-        "-b:a",
-        "32k",
-        "-vbr",
-        "on",
-        "-compression_level",
-        "10",
-        "-application",
-        "voip",
-        outputOggPath
-      ],
-      { windowsHide: true }
-    );
-
-    child.once("error", () => resolve(false));
-    child.once("close", (code) => resolve(code === 0));
-  });
-}
-
-function safeRemoveFile(filePath: string): void {
-  try {
-    rmSync(filePath, { force: true });
-  } catch {
-    // ignore best-effort temp cleanup failures
-  }
-}
-
-function stylePromptForImage(
-  prompt: string,
-  style: "image" | "meme" | "quote_card"
-): string {
-  const base = compactText(prompt);
-  if (style === "meme") {
-    return `${base}. Meme-style visual, expressive composition, internet-culture energy, bold readable layout.`;
-  }
-  if (style === "quote_card") {
-    return `${base}. Premium quote-card design, elegant typography, soft gradient background, highly readable text layout.`;
-  }
-  return `${base}. Photorealistic or high-quality digital art, clean composition, rich detail.`;
-}
-
-function buildPollinationsImageUrl(args: {
-  prompt: string;
-  width: number;
-  height: number;
-  seed: number;
-  style: "image" | "meme" | "quote_card";
-}): string {
-  const prompt = stylePromptForImage(args.prompt, args.style);
-  const width = clampInt(args.width, 512, 1536);
-  const height = clampInt(args.height, 512, 1536);
-  const seed = clampInt(args.seed, 1, 2147483647);
-  return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=${width}&height=${height}&seed=${seed}&model=flux&nologo=true`;
-}
-
-function defaultImageCaption(
-  style: "image" | "meme" | "quote_card",
-  prompt: string
-): string {
-  const short = previewText(prompt, 72);
-  if (style === "meme") return `meme drop: ${short}`;
-  if (style === "quote_card") return "styled quote card";
-  return `image: ${short}`;
-}
-
-function toKlipyCustomerId(value: string): string {
-  const compact = compactText(value || "");
-  const userPart = compact.split("@")[0]?.split(":")[0] ?? compact;
-  const sanitized = userPart.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 64);
-  return sanitized || "talky_user";
-}
-
-function normalizeKlipyLocale(value: string | undefined): string | undefined {
-  const compact = compactText(value ?? "").toLowerCase();
-  if (/^[a-z]{2}$/.test(compact)) return compact;
-  const localeMatch = compact.match(/^[a-z]{2}_[a-z]{2}$/);
-  if (localeMatch) {
-    const country = compact.split("_")[1];
-    if (country && /^[a-z]{2}$/.test(country)) return country;
-  }
-  return undefined;
-}
-
-function isToolListIntent(input: string): boolean {
-  const text = compactText(input).toLowerCase();
-  if (!text) return false;
-
-  const keywords = [
-    "tool list",
-    "list tools",
-    "available tools",
-    "what tools",
-    "ki ki tool",
-    "tool call korte",
-    "tool call list",
-    "registry"
-  ];
-
-  return keywords.some((keyword) => text.includes(keyword));
-}
-
-function inferMemoryFact(text: string): string | null {
-  if (!text) return null;
-  if (text.length > 220) return null;
-  const low = text.toLowerCase();
-  const personalCue = low.includes("i ") || low.includes("my ") || low.includes("i'm ");
-  const imperativeCue =
-    /\b(remember|dont forget|don't forget|note that|keep in mind|remind me|save this)\b/i.test(
-      text
-    );
-  const scheduleCue =
-    /\b(meeting|meet|call|appointment|appt|deadline|due|flight|interview|class|exam|party|dinner|lunch)\b/i.test(
-      text
-    ) && /\b(at|on|by|tomorrow|tonight|today|am|pm|\d{1,2}(:\d{2})?)\b/i.test(text);
-  if (!personalCue && !imperativeCue && !scheduleCue) return null;
-  return text;
-}
-
-export async function listJoinedGroups(): Promise<void> {
-  const logger = pino({ level: "warn" });
-  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-  const { version } = await fetchLatestBaileysVersion();
-  const sock = makeWASocket({
-    auth: state,
-    version,
-    printQRInTerminal: false,
-    markOnlineOnConnect: false,
-    fireInitQueries: false,
-    syncFullHistory: false,
-    shouldIgnoreJid: shouldIgnoreIncomingJid,
-    shouldSyncHistoryMessage: () => false,
-    logger
-  });
-
-  sock.ev.on("creds.update", saveCreds);
-  sock.ev.on("connection.update", async (update: any) => {
-    if (update?.qr) {
-      console.log("\nScan this QR in WhatsApp > Linked devices:\n");
-      qrcode.generate(update.qr, { small: true });
-    }
-    if (update?.connection === "open") {
-      const rows = await fetchJoinedGroups(sock);
-      console.log(JSON.stringify(rows, null, 2));
-      process.exit(0);
-    }
-    if (update?.connection === "close") {
-      const code = update?.lastDisconnect?.error?.output?.statusCode;
-      if (code === DisconnectReason.loggedOut) {
-        console.error("Logged out. Remove wa_auth and run again.");
-        process.exit(1);
-      }
-      if (code === DisconnectReason.connectionReplaced || code === 440) {
-        console.error("Connection replaced. Ensure only one Talky process is running.");
-        process.exit(1);
-      }
-    }
-  });
-
-  await new Promise(() => undefined);
-}
-
-export async function listActiveGroups(config: AppConfig): Promise<void> {
-  const logger = pino({ level: "warn" });
-  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-  const { version } = await fetchLatestBaileysVersion();
-  const sock = makeWASocket({
-    auth: state,
-    version,
-    printQRInTerminal: false,
-    markOnlineOnConnect: false,
-    fireInitQueries: false,
-    syncFullHistory: false,
-    shouldIgnoreJid: shouldIgnoreIncomingJid,
-    shouldSyncHistoryMessage: () => false,
-    logger
-  });
-
-  sock.ev.on("creds.update", saveCreds);
-  sock.ev.on("connection.update", async (update: any) => {
-    if (update?.qr) {
-      console.log("\nScan this QR in WhatsApp > Linked devices:\n");
-      qrcode.generate(update.qr, { small: true });
-    }
-    if (update?.connection === "open") {
-      const rows = await fetchJoinedGroups(sock);
-      const active = rows.filter((group) => {
-        if (config.mutedGroupJids.includes(group.jid)) return false;
-        if (config.allowedGroupJids.length === 0) return true;
-        return config.allowedGroupJids.includes(group.jid);
-      });
-      console.log(JSON.stringify(active, null, 2));
-      process.exit(0);
-    }
-    if (update?.connection === "close") {
-      const code = update?.lastDisconnect?.error?.output?.statusCode;
-      if (code === DisconnectReason.loggedOut) {
-        console.error("Logged out. Remove wa_auth and run again.");
-        process.exit(1);
-      }
-      if (code === DisconnectReason.connectionReplaced || code === 440) {
-        console.error("Connection replaced. Ensure only one Talky process is running.");
-        process.exit(1);
-      }
-    }
-  });
-
-  await new Promise(() => undefined);
-}
-
-export async function sendDirectProactiveMessage(args: {
-  target: string;
-  config: AppConfig;
-  env: AppEnv;
-}): Promise<void> {
-  const logger = pino({ level: "warn" });
-  const targetJid = toDirectTargetJid(args.target);
-  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-  const { version } = await fetchLatestBaileysVersion();
-  const sock = makeWASocket({
-    auth: state,
-    version,
-    printQRInTerminal: false,
-    markOnlineOnConnect: false,
-    fireInitQueries: false,
-    syncFullHistory: false,
-    shouldIgnoreJid: shouldIgnoreIncomingJid,
-    shouldSyncHistoryMessage: () => false,
-    logger
-  });
-
-  const gemini = new GeminiClient(args.env.geminiApiKey);
-  const memory = new MemoryService(args.env.mem0ApiKey);
-
-  sock.ev.on("creds.update", saveCreds);
-  sock.ev.on("connection.update", async (update: any) => {
-    if (update?.qr) {
-      console.log("\nScan this QR in WhatsApp > Linked devices:\n");
-      qrcode.generate(update.qr, { small: true });
-    }
-    if (update?.connection === "open") {
-      const memories = await memory.retrieve(targetJid, "conversation starter", 3);
-      const memoryText =
-        memories.length === 0
-          ? "none"
-          : memories.map((item, index) => `${index + 1}. ${item.fact}`).join("\n");
-      let text = "Ki re boss, bhalo? Ajke ki update?";
-      try {
-        const output = await gemini.generate({
-          model: args.config.model,
-          systemInstruction: [
-            `You are ${args.config.botName}.`,
-            "Write one short funny Banglish/Benglish WhatsApp opener.",
-            "Keep it warm, casual, and natural. Max 1-2 short lines.",
-            "No NO_REPLY token."
-          ].join("\n"),
-          parts: [{ text: `Target JID: ${targetJid}\nRelevant memory:\n${memoryText}` }],
-          temperature: 0.8,
-          maxOutputTokens: 80
-        });
-        const cleaned = normalizeReplyOutput(output);
-        if (cleaned) text = cleaned;
-      } catch {
-        // fallback text already set
-      }
-
-      await sock.sendPresenceUpdate("composing", targetJid);
-      await sleep(randomBetween(900, 1800));
-      await sock.sendPresenceUpdate("paused", targetJid);
-      await sock.sendMessage(targetJid, { text });
-      console.log(`Proactive message sent to ${targetJid}: ${text}`);
-      process.exit(0);
-    }
-    if (update?.connection === "close") {
-      const code = update?.lastDisconnect?.error?.output?.statusCode;
-      if (code === DisconnectReason.loggedOut) {
-        console.error("Logged out. Remove wa_auth and run again.");
-        process.exit(1);
-      }
-      if (code === DisconnectReason.connectionReplaced || code === 440) {
-        console.error("Connection replaced. Ensure only one Talky process is running.");
-        process.exit(1);
-      }
-    }
-  });
-
-  await new Promise(() => undefined);
-}
-
-async function fetchJoinedGroups(
-  sock: any
-): Promise<Array<{ jid: string; name: string }>> {
-  const groups = await sock.groupFetchAllParticipating();
-  return Object.values(groups).map((group: any) => ({
-    jid: group.id,
-    name: group.subject
-  }));
-}
-
-function isGroupJidAllowed(chatJid: string, allowedGroupJids: string[]): boolean {
-  const needle = chatJid.trim().toLowerCase();
-  return allowedGroupJids.some((g) => g.trim().toLowerCase() === needle);
-}
-
-function isDirectJidAllowed(chatJid: string, allowlist: string[]): boolean {
-  const incoming = buildDirectIdentifiers(chatJid);
-  for (const raw of allowlist) {
-    const allowed = buildDirectIdentifiers(raw);
-    for (const value of allowed) {
-      if (incoming.has(value)) return true;
-    }
-  }
-  return false;
-}
-
-function buildDirectIdentifiers(input: string): Set<string> {
-  const values = new Set<string>();
-  const raw = input.trim().toLowerCase();
-  if (!raw) return values;
-
-  values.add(raw);
-  const normalized = jidNormalizedUser(raw).toLowerCase();
-  values.add(normalized);
-
-  const userPart = normalized.split("@")[0];
-  if (userPart) {
-    values.add(userPart);
-    values.add(`${userPart}@s.whatsapp.net`);
-    values.add(`${userPart}@lid`);
-
-    // WhatsApp delivers many chats under a LID that differs from the phone JID.
-    // Consult the wa_auth lid-mapping so allowlisting either form covers both
-    // (e.g. 916291233974@s.whatsapp.net ⇔ 124245216596056@lid).
-    for (const mapped of [lidDigitsForPhone(userPart), phoneDigitsForLid(userPart)]) {
-      if (!mapped) continue;
-      values.add(mapped);
-      values.add(`${mapped}@s.whatsapp.net`);
-      values.add(`${mapped}@lid`);
-    }
-  }
-
-  return values;
-}
-
-function normalizeReplyOutput(raw: string): string {
-  const trimmed = compactText(raw);
-  if (!trimmed) return "";
-  if (/^NO_REPLY$/i.test(trimmed)) return "";
-  const withoutToken = compactText(trimmed.replace(/\bNO_REPLY\b/gi, ""));
-  return withoutToken;
-}
-
-function splitReplyOutputToMessages(reply: string): string[] {
-  const normalized = normalizeReplyOutput(reply);
-  if (!normalized) return [];
-  if (!normalized.includes("|||")) return [normalized];
-  const cleaned = normalized
-    .split("|||")
-    .map((part) => compactText(part))
-    .filter((part) => part.length > 0);
-  if (cleaned.length === 0) return [normalized];
-  return cleaned.slice(0, 2);
-}
-
-function toDirectTargetJid(input: string): string {
-  const { jid } = normalizeJidInput(input);
-  return jid;
-}
-
-// WAMessage.messageTimestamp is either a number (seconds) or a protobuf Long.
-// Returns unix seconds or null when the value is missing/unparseable.
-function extractMessageTimestampSeconds(value: unknown): number | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value === "number" && Number.isFinite(value)) return Math.floor(value);
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? Math.floor(parsed) : null;
-  }
-  if (typeof value === "object") {
-    const maybe = value as { toNumber?: () => number; low?: number; high?: number };
-    if (typeof maybe.toNumber === "function") {
-      const n = maybe.toNumber();
-      return Number.isFinite(n) ? Math.floor(n) : null;
-    }
-    if (typeof maybe.low === "number") return Math.floor(maybe.low);
-  }
-  return null;
-}
-
-export type ContactResolution = {
-  input: string;
-  phoneJid: string | null;
-  lidJid: string | null;
-  exists: boolean;
-  warnings: string[];
-};
-
-export async function resolveContactJid(input: string): Promise<ContactResolution> {
-  const warnings: string[] = [];
-  const parsed = normalizeJidInput(input);
-
-  if (parsed.kind === "group" || parsed.kind === "broadcast") {
-    throw new Error(`contact:resolve expects a user JID/phone, got ${parsed.kind}: ${input}`);
-  }
-
-  const initialPhoneJid = parsed.kind === "phone" ? parsed.jid : null;
-  const initialLidJid = parsed.kind === "lid" ? parsed.jid : null;
-
-  const logger = pino({ level: "warn" });
-  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-  const { version } = await fetchLatestBaileysVersion();
-  const sock = makeWASocket({
-    auth: state,
-    version,
-    printQRInTerminal: false,
-    markOnlineOnConnect: false,
-    fireInitQueries: false,
-    syncFullHistory: false,
-    shouldIgnoreJid: shouldIgnoreIncomingJid,
-    shouldSyncHistoryMessage: () => false,
-    logger
-  });
-  sock.ev.on("creds.update", saveCreds);
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error("connection timeout — is wa_auth valid? try `bun run start` once first"));
-      }, 30_000);
-      sock.ev.on("connection.update", (update: any) => {
-        if (update?.qr) {
-          clearTimeout(timer);
-          reject(new Error("no active session — run `bun run start` and scan the QR first"));
-        }
-        if (update?.connection === "open") {
-          clearTimeout(timer);
-          resolve();
-        }
-        if (update?.connection === "close") {
-          const code = update?.lastDisconnect?.error?.output?.statusCode;
-          if (code === DisconnectReason.loggedOut) {
-            clearTimeout(timer);
-            reject(new Error("logged out — run `bun run relink` for a fresh QR"));
-          }
-        }
-      });
-    });
-
-    let phoneJid = initialPhoneJid;
-    let exists = false;
-    if (parsed.kind === "phone" || (parsed.kind === "lid" && /^\d+$/.test(parsed.digits))) {
-      const lookupDigits = parsed.digits;
-      try {
-        const results = await sock.onWhatsApp(lookupDigits);
-        const match = results?.find((entry: any) => entry?.exists);
-        if (match) {
-          phoneJid = match.jid ?? `${lookupDigits}@s.whatsapp.net`;
-          exists = true;
-        } else {
-          warnings.push(`WhatsApp says this number is not registered: ${lookupDigits}`);
-          phoneJid = phoneJid ?? `${lookupDigits}@s.whatsapp.net`;
-        }
-      } catch (error) {
-        warnings.push(
-          `onWhatsApp lookup failed: ${error instanceof Error ? error.message : String(error)}`
-        );
-      }
-    }
-
-    let lidJid = initialLidJid;
-    if (!lidJid && phoneJid) {
-      try {
-        const lidStore = (sock as any).signalRepository?.lidMapping;
-        if (lidStore?.getLIDForPN) {
-          const lid = await lidStore.getLIDForPN(phoneJid);
-          if (typeof lid === "string" && lid) {
-            lidJid = lid.split(":")[0].endsWith("@lid") ? lid.split(":")[0] : lid;
-          } else {
-            warnings.push("no @lid mapping cached yet — exchange at least one message with this contact first");
-          }
-        }
-      } catch (error) {
-        warnings.push(
-          `LID lookup failed: ${error instanceof Error ? error.message : String(error)}`
-        );
-      }
-    }
-
-    return {
-      input,
-      phoneJid,
-      lidJid,
-      exists,
-      warnings
-    };
-  } finally {
-    try {
-      sock.ev.removeAllListeners("connection.update");
-      sock.end(undefined as any);
-    } catch {
-      // ignore
-    }
-  }
-}
+export {
+  listActiveGroups,
+  listJoinedGroups,
+  resolveContactJid,
+  sendDirectProactiveMessage,
+  type ContactResolution
+} from "./whatsapp-cli";

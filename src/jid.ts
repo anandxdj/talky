@@ -1,3 +1,5 @@
+import { compactText } from "./utils";
+
 const PHONE_SUFFIX = "@s.whatsapp.net";
 const LID_SUFFIX = "@lid";
 const GROUP_SUFFIX = "@g.us";
@@ -63,4 +65,40 @@ export function toPhoneJid(input: string): string {
     if (/^\d+$/.test(parsed.digits)) return `${parsed.digits}${PHONE_SUFFIX}`;
   }
   throw new Error(`cannot convert ${parsed.kind} JID to phone JID: ${input}`);
+}
+
+export function shouldIgnoreIncomingJid(jid?: string | null): boolean {
+  if (!jid) return false;
+  return (
+    jid === "status@broadcast" ||
+    jid.endsWith("@broadcast") ||
+    jid.endsWith("@newsletter")
+  );
+}
+
+export function buildMediaSendTargets(chatJid: string): string[] {
+  const targets = new Set<string>();
+  targets.add(chatJid);
+
+  if (chatJid.endsWith("@g.us")) {
+    return [...targets];
+  }
+
+  const user = compactText(chatJid.split("@")[0] ?? "");
+  if (!user) {
+    return [...targets];
+  }
+
+  if (chatJid.endsWith("@lid")) {
+    targets.add(`${user}@s.whatsapp.net`);
+  } else if (chatJid.endsWith("@s.whatsapp.net")) {
+    targets.add(`${user}@lid`);
+  }
+
+  return [...targets];
+}
+
+export function toDirectTargetJid(input: string): string {
+  const { jid } = normalizeJidInput(input);
+  return jid;
 }

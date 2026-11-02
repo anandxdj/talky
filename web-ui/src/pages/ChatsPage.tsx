@@ -69,7 +69,8 @@ function DebugPanel({ events }: { events: DebugLogEvent[] }) {
 }
 
 export function ChatsPage() {
-  const { chats, debugEvents, deleteChat } = useTalkyConsole()
+  const { chats, debugEvents, deleteChat, groups } = useTalkyConsole()
+  const groupNames = useMemo(() => new Map(groups.map((g) => [g.jid, g.name])), [groups])
   const [searchParams, setSearchParams] = useSearchParams()
   const jids = useMemo(() => Object.keys(chats).sort(), [chats])
   const [selectedJid, setSelectedJid] = useState<string | null>(null)
@@ -162,8 +163,9 @@ export function ChatsPage() {
       </AlertDialog>
 
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Chats</h1>
-        <p className="text-muted-foreground">
+        <span className="eyebrow">Monitor · data/chats</span>
+        <h1 className="mt-1.5 text-2xl leading-tight font-semibold tracking-[-0.03em] md:text-[32px]">Conversations</h1>
+        <p className="mt-1.5 text-sm text-muted-foreground">
           Parsed histories from <code className="text-xs">data/chats/*.md</code> with tool and
           decision traces for the selected thread.
         </p>
@@ -192,7 +194,10 @@ export function ChatsPage() {
                             : 'min-w-0 flex-1 rounded-md px-3 py-2 text-left text-sm text-muted-foreground hover:bg-muted'
                         }
                       >
-                        <span className="block truncate">{jid}</span>
+                        <span className="block truncate">{groupNames.get(jid) ?? jid}</span>
+                        {groupNames.has(jid) ? (
+                          <span className="block truncate font-mono text-[11px] opacity-70">{jid}</span>
+                        ) : null}
                         <span className="text-xs opacity-80">
                           {chats[jid]?.length ?? 0} messages
                         </span>
@@ -251,7 +256,7 @@ export function ChatsPage() {
                         {chats[selectedJid].length === 1 ? '' : 's'}
                       </span>
                       <Link
-                        to={`/persona?tab=from-chats&jid=${encodeURIComponent(selectedJid)}`}
+                        to={`/voice?tab=from-chats&jid=${encodeURIComponent(selectedJid)}`}
                         className="text-primary underline-offset-4 hover:underline"
                       >
                         Improve persona from this chat →

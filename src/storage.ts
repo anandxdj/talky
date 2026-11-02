@@ -262,6 +262,11 @@ export function readDebugLogEvents(args?: {
     .slice(0, limit);
 }
 
+/** All reply-decision events (uncapped) — used by dashboard analytics. */
+export function readDecisionEvents(): DebugLogEvent[] {
+  return parseDecisionLog(path.join(LOG_DIR, "decisions.md"));
+}
+
 function parseChatEntries(chatJid: string): ChatEntry[] {
   const filePath = path.join(CHAT_DIR, `${sanitizeJid(chatJid)}.md`);
   if (!existsSync(filePath)) return [];

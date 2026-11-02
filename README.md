@@ -363,14 +363,26 @@ Drop `data/memory.db` at any time to force a full rebuild from the Markdown file
 Start the bot with `bun run start`, then open `http://127.0.0.1:4173/` (or the port set in `WEB_UI_PORT`).
 
 
-| Tab       | What it does                                               |
-| --------- | ---------------------------------------------------------- |
-| Dashboard | Connection status, uptime, runtime config                  |
-| Chats     | Per-contact message history + debug events                 |
-| Config    | Live config editor                                         |
-| Inbox     | Unauthorized contacts/groups — one-click allow or discard  |
-| Persona   | Inline editor for soul, communication rules, recent memory |
-| Actions   | Session relink / repair                                    |
+Light and dark themes (follows the system setting; toggle at the bottom of the rail) and a
+phone layout with a bottom tab bar.
+
+| Page              | What it does |
+| ----------------- | ------------ |
+| Overview          | Today's numbers with 7-day sparklines, hour-by-hour outcomes (replied / handed to Claude / silent), message pipeline, weekday × hour heatmap, per-chat table, and the reply-engine switch (Gemini / Claude / Both) |
+| Live queue        | Claude mediator queue: read context, reply in your voice or stay silent; unknown senders with one-click allow/dismiss |
+| Conversations     | Per-chat message history with tool and decision traces |
+| Voice & persona   | Voice fingerprint (your phone-typed messages vs Talky's: length, bursts, emoji, casing) above the persona editors |
+| Access rules      | Direct-chat mode, allowlists, mutes, reply behaviour |
+| Settings          | Gemini model, WhatsApp pairing QR, relink / repair / factory reset, read-only config |
+
+All analytics come from files Talky already writes (`data/chats/`, `data/logs/decisions.md`,
+`data/claude/*.jsonl`) via `GET /api/stats/overview`.
+
+**API security.** The control API can send WhatsApp messages, so every `/api/*` request
+must come from a loopback `Host`, carry no foreign browser `Origin`, use JSON bodies for
+writes, and include `X-Talky-Token` (from `data/control-token`). The panel fetches the token
+automatically. Config writes over HTTP are validated, and `claudeTriggerCommand` plus the
+local-file access roots can only be changed in `config.yaml`.
 
 
 ---
@@ -380,7 +392,14 @@ Start the bot with `bun run start`, then open `http://127.0.0.1:4173/` (or the p
 ```
 src/
   cli.ts               ← Commander CLI entry point
-  whatsapp.ts          ← Baileys client & message loop
+  whatsapp.ts          ← Baileys client & message loop (WhatsAppAgent)
+  whatsapp-cli.ts      ← One-shot CLI helpers (list groups, proactive send)
+  policy/access.ts     ← Who may reach the bot (allowlists, LID-aware) + mediator routing
+  reply/parse.ts       ← Model output → messages (||| splitting, text tool calls)
+  reply/intents.ts     ← Tool-list / voice / GIF intent detection
+  media/               ← MIME helpers, TTS audio (PCM→WAV→Opus), images, stickers
+  errors.ts            ← Boom / error formatting
+  claude-bridge.ts     ← Claude mediator queue (atomic writes, crash-safe JSONL)
   decision.ts          ← Reply decision logic
   self-chat.ts         ← Self-DM assistant (commands, reminders, digests)
   gemini.ts            ← Gemini SDK wrapper (text, multimodal, TTS, function calling)
@@ -395,6 +414,9 @@ src/
   types.ts             ← Shared TypeScript types
   web/
     control-server.ts  ← REST API for the web control panel
+    auth.ts            ← Host / Origin / JSON / token guard
+    stats.ts           ← Dashboard analytics from chat logs, decisions, Claude queue
+tests/                 ← bun test suites (run: bun test)
 web-ui/                ← Vite + React control panel (separate package.json)
 persona/               ← Your persona files (gitignored)
 data/                  ← Runtime data (gitignored)

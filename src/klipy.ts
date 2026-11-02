@@ -206,3 +206,21 @@ function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, Math.floor(value)));
 }
+
+export function toKlipyCustomerId(value: string): string {
+  const compact = compactText(value || "");
+  const userPart = compact.split("@")[0]?.split(":")[0] ?? compact;
+  const sanitized = userPart.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 64);
+  return sanitized || "talky_user";
+}
+
+export function normalizeKlipyLocale(value: string | undefined): string | undefined {
+  const compact = compactText(value ?? "").toLowerCase();
+  if (/^[a-z]{2}$/.test(compact)) return compact;
+  const localeMatch = compact.match(/^[a-z]{2}_[a-z]{2}$/);
+  if (localeMatch) {
+    const country = compact.split("_")[1];
+    if (country && /^[a-z]{2}$/.test(country)) return country;
+  }
+  return undefined;
+}

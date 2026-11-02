@@ -1,10 +1,10 @@
 import { serve } from "bun";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
-import { join, resolve } from "path";
+import { join, resolve, sep } from "path";
 import { PERSONA_CONTACTS_DIR, PERSONA_GROUPS_DIR } from "../config.js";
 import { GeminiClient } from "../gemini.js";
 import { listGeminiModelsForGenerateContent } from "../gemini-models.js";
-import { loadConfig, loadEnv, saveConfig } from "../config.js";
+import { applyConfigPatch, loadConfig, loadEnv, saveConfig } from "../config.js";
 import { loadPersonaContext, personaPaths } from "../persona.js";
 import { suggestPersonaFromTranscript } from "../persona-suggestions.js";
 import {
@@ -20,6 +20,13 @@ import {
   MEDIA_INBOX_DIR
 } from "../claude-bridge.js";
 import { WhatsAppAgent } from "../whatsapp.js";
+import {
+  checkRequestOrigin,
+  checkRequestToken,
+  guardOptionsFromEnv,
+  loadOrCreateControlToken
+} from "./auth.js";
+import { loadOverviewStats } from "./stats.js";
 
 const DEFAULT_PORT = process.env.WEB_UI_PORT ? parseInt(process.env.WEB_UI_PORT) : 4173;
 
@@ -38,8 +45,17 @@ function listPersonaMarkdownStemPreviews(
     .sort((a, b) => a.stem.localeCompare(b.stem));
 }
 
-function readPersonaProfileFile(kind: "contact" | "group", stem: string): string {
+/** Profile stems are bare file names; anything that could escape the folder is rejected. */
+function safeProfileStem(stem: string): string {
   const safe = stem.replace(/\.md$/i, "").trim();
+  if (!safe || safe.includes("..") || safe.includes("/") || safe.includes("\\") || safe.includes("\0")) {
+    throw new Error("invalid profile stem");
+  }
+  return safe;
+}
+
+function readPersonaProfileFile(kind: "contact" | "group", stem: string): string {
+  const safe = safeProfileStem(stem);
   const dir = kind === "contact" ? PERSONA_CONTACTS_DIR : PERSONA_GROUPS_DIR;
   const filePath = join(dir, `${safe}.md`);
   if (!existsSync(filePath)) return "";
@@ -47,16 +63,17 @@ function readPersonaProfileFile(kind: "contact" | "group", stem: string): string
 }
 
 function writePersonaProfileFile(kind: "contact" | "group", stem: string, content: string): void {
-  const safe = stem.replace(/\.md$/i, "").trim();
-  if (!safe || safe.includes("..") || safe.includes("/") || safe.includes("\\")) {
-    throw new Error("invalid profile stem");
-  }
+  const safe = safeProfileStem(stem);
   const dir = kind === "contact" ? PERSONA_CONTACTS_DIR : PERSONA_GROUPS_DIR;
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `${safe}.md`), content, "utf-8");
 }
 
 export function startControlServer(runtime: WhatsAppAgent) {
+  const guard = guardOptionsFromEnv(DEFAULT_PORT, loadOrCreateControlToken());
+  if (!guard.tokenRequired) {
+    console.warn("[Talky Web UI] TALKY_API_TOKEN=off — API token check disabled (host/origin checks still apply).");
+  }
   const server = serve({
     port: DEFAULT_PORT,
     // Local-only: the API can send WhatsApp messages (claude/send), so never expose it on the LAN.
@@ -71,6 +88,18 @@ export function startControlServer(runtime: WhatsAppAgent) {
             .replace(/^\/api\/?/, "")
             .replace(/\/+$/, "") || "";
 
+        const originDenied = checkRequestOrigin(req, guard);
+        if (originDenied) return originDenied;
+        // The bundled UI bootstraps its token here; only same-origin/local callers get this far.
+        if (req.method === "GET" && path === "auth/session") {
+          return Response.json(
+            { token: guard.token, tokenRequired: guard.tokenRequired },
+            { headers: { "Cache-Control": "no-store" } }
+          );
+        }
+        const tokenDenied = checkRequestToken(req, guard);
+        if (tokenDenied) return tokenDenied;
+
         if (req.method === "GET") {
           switch (path) {
             case "status":
@@ -81,6 +110,8 @@ export function startControlServer(runtime: WhatsAppAgent) {
                 });
             case "config":
                 return Response.json(loadConfig());
+            case "stats/overview":
+                return Response.json(loadOverviewStats());
             case "unauthorized":
                 return Response.json(getUnauthorizedCandidates());
                         case "groups": {
@@ -292,11 +323,10 @@ export function startControlServer(runtime: WhatsAppAgent) {
                 }
                 switch (path) {
                     case "config": {
-                        const current = loadConfig();
-                        const newConfig = { ...current, ...body };
+                        const { config: newConfig, rejectedKeys } = applyConfigPatch(loadConfig(), body);
                         saveConfig(newConfig);
                         runtime.updateConfig(newConfig);
-                        return Response.json({ success: true, config: newConfig });
+                        return Response.json({ success: true, config: newConfig, rejectedKeys });
                     }
                     case "unauthorized/resolve": {
                         const jid = typeof body.jid === "string" ? body.jid : "";
@@ -475,6 +505,10 @@ export function startControlServer(runtime: WhatsAppAgent) {
       // Serve UI builds (fallback to index.html for SPA)
       const distDir = resolve(process.cwd(), "web-ui", "dist");
       let filePath = resolve(distDir, url.pathname === "/" ? "index.html" : url.pathname.slice(1));
+      // Never serve anything outside web-ui/dist (encoded `..` segments, absolute paths).
+      if (filePath !== distDir && !filePath.startsWith(distDir + sep)) {
+        filePath = resolve(distDir, "index.html");
+      }
 
       const staticContentType = (target: string): string => {
         if (target.endsWith(".js")) return "application/javascript";

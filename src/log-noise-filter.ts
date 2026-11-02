@@ -210,3 +210,59 @@ export function wrapLoggerWithNoiseFilter(inner: NoiseLogger): NoiseLogger {
 
   return wrapped;
 }
+
+export const KNOWN_LIBSIGNAL_CONSOLE_NOISE: RegExp[] = [
+  /^closing stale open session for new outgoing prekey bundle\b/i,
+  /^closing open session for new outgoing prekey bundle\b/i,
+  /^closing open session in favor of incoming prekey bundle\b/i,
+  /^closing session\b/i,
+  /^removing old closed session\b/i
+];
+
+let consoleNoiseFilterInstalled = false;
+
+export function normalizeConsoleArg(arg: unknown): string {
+  if (typeof arg === "string") return arg;
+  if (arg instanceof Error) return `${arg.name}: ${arg.message}`;
+  if (arg === null || arg === undefined) return "";
+  if (typeof arg === "object") {
+    return (arg as { constructor?: { name?: string } }).constructor?.name ?? "";
+  }
+  return String(arg);
+}
+
+export function shouldSuppressKnownLibsignalConsoleNoise(args: unknown[]): boolean {
+  const normalized = args
+    .map((arg) => normalizeConsoleArg(arg))
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .filter((part) => part.length > 0);
+  if (normalized.length === 0) return false;
+
+  for (const part of normalized) {
+    if (KNOWN_LIBSIGNAL_CONSOLE_NOISE.some((pattern) => pattern.test(part))) {
+      return true;
+    }
+  }
+
+  const combined = normalized.join(" ").replace(/\s+/g, " ").trim();
+  return KNOWN_LIBSIGNAL_CONSOLE_NOISE.some((pattern) => pattern.test(combined));
+}
+
+export function installKnownConsoleNoiseFilter(): void {
+  if (consoleNoiseFilterInstalled) return;
+  consoleNoiseFilterInstalled = true;
+
+  const wrap = (original: (...args: unknown[]) => void) => {
+    return (...args: unknown[]) => {
+      if (shouldSuppressKnownLibsignalConsoleNoise(args)) return;
+      original(...args);
+    };
+  };
+
+  console.log = wrap(console.log.bind(console));
+  console.info = wrap(console.info.bind(console));
+  console.debug = wrap(console.debug.bind(console));
+  console.trace = wrap(console.trace.bind(console));
+  console.warn = wrap(console.warn.bind(console));
+  console.error = wrap(console.error.bind(console));
+}

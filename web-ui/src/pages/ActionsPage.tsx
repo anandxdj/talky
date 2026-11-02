@@ -250,8 +250,9 @@ export function ActionsPage() {
         </AlertDialogContent>
       </AlertDialog>
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Actions</h1>
-        <p className="text-muted-foreground">
+        <span className="eyebrow">Tune · model and session</span>
+        <h1 className="mt-1.5 text-2xl leading-tight font-semibold tracking-[-0.03em] md:text-[32px]">Settings</h1>
+        <p className="mt-1.5 text-sm text-muted-foreground">
           Gemini model selection and WhatsApp session tools — CLI parity for{' '}
           <code className="text-xs">relink</code>, repair, and full auth reset (
           <code className="text-xs">bun run relink</code>).
@@ -430,6 +431,17 @@ export function ActionsPage() {
           </CardFooter>
         </Card>
       </div>
+
+      <details className="rounded-xl border bg-card p-4 md:p-5">
+        <summary className="cursor-pointer text-[15px] font-semibold">Runtime config (read-only JSON)</summary>
+        <p className="mt-1 text-[13px] text-muted-foreground">
+          Snapshot of <code className="font-mono text-xs">GET /api/config</code>. The shell trigger command and
+          file-access roots can only be changed in <code className="font-mono text-xs">config.yaml</code>.
+        </p>
+        <pre className="mt-3 max-h-[480px] overflow-auto rounded-lg bg-muted p-4 font-mono text-xs leading-relaxed">
+          {JSON.stringify(config, null, 2)}
+        </pre>
+      </details>
     </div>
   )
 }
