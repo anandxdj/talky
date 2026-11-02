@@ -13,6 +13,7 @@ import {
   type Series,
 } from '@/components/charts/charts'
 import { EmptyState, PageHeader, Panel } from '@/components/talky/Page'
+import { PauseRepliesButton } from '@/components/talky/PauseReplies'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useTalkyConsole } from '@/context/TalkyConsoleContext'
 import { formatDuration, initialOf, maskedJid, pad2, percent, relativeTime } from '@/lib/format'
@@ -442,7 +443,12 @@ export function OverviewPage() {
             </span>
           </>
         }
-        actions={<EngineSwitch />}
+        actions={
+          <>
+            <EngineSwitch />
+            <PauseRepliesButton />
+          </>
+        }
       />
 
       <KeyFigures stats={stats} />

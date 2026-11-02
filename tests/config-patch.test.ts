@@ -56,3 +56,12 @@ describe("normalizeConfig JID lists", () => {
     expect(config.claudeMediatorChats).toEqual(["12345"]);
   });
 });
+
+describe("repliesPaused via applyConfigPatch", () => {
+  test("is accepted from the API and stays off by default", () => {
+    expect(base.repliesPaused).toBe(false);
+    const { config, rejectedKeys } = applyConfigPatch(base, { repliesPaused: true });
+    expect(rejectedKeys).toEqual([]);
+    expect(config.repliesPaused).toBe(true);
+  });
+});

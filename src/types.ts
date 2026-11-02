@@ -115,6 +115,8 @@ export type AppConfig = {
   claudeTriggerCommand: string;
   /** Minimum seconds between trigger command spawns (debounce). */
   claudeTriggerCooldownSeconds: number;
+  /** Kill switch: when true Talky records inbound messages but sends no automatic replies (self-chat keeps working). */
+  repliesPaused: boolean;
 };
 
 export type PersonaContext = {

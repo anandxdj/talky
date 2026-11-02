@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { useTalkyConsole } from '@/context/TalkyConsoleContext'
 import { useIsMobile } from '@/hooks/use-mobile'
+import { useRepliesPause } from '@/hooks/use-replies-pause'
 import { apiJson } from '@/lib/api'
 import { initialOf, maskedJid, relativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -105,6 +106,7 @@ function ConversationPane({
   onBack: () => void
 }) {
   const { claudeStatus, refresh } = useTalkyConsole()
+  const { paused } = useRepliesPause()
   const head = events[events.length - 1]!
   const [ctx, setCtx] = useState<ContextPayload | null>(null)
   const [ctxError, setCtxError] = useState<string | null>(null)
@@ -142,7 +144,8 @@ function ConversationPane({
     try {
       await apiJson('/api/claude/send', {
         method: 'POST',
-        body: JSON.stringify({ to: head.chatJid, text: draft }),
+        // A human typed this, so it goes out even while automatic replies are paused.
+        body: JSON.stringify({ to: head.chatJid, text: draft, force: true }),
       })
       await ack()
       toast.success(`Sent ${parts.length} message${parts.length === 1 ? '' : 's'} to ${chatTitle(head)}`)
@@ -244,6 +247,11 @@ function ConversationPane({
             <span className="text-[#c3c2b7]">
               {parts.length > 1 ? `${parts.length} messages` : 'Separate messages with |||'}
             </span>
+            {paused ? (
+              <span className="font-mono text-xs text-[var(--status-warning)]">
+                replies paused · this send still goes out
+              </span>
+            ) : null}
             {!claudeStatus?.connected ? (
               <span className="ml-auto font-mono text-xs text-[#f08a7a]">WhatsApp not connected</span>
             ) : null}

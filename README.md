@@ -146,6 +146,7 @@ KLIPY_APP_KEY=your_key_here     # enables GIF reactions
 | `toolCallingEnabled`         | `true`             | Enable Gemini tool use                       |
 | `stickerReplyMode`           | `always-sticker`   | `always-sticker` / `model` / `explicit-only` |
 | `dailyMessageLimit`          | `300`              | Max group replies per day                    |
+| `repliesPaused`              | `false`            | Kill switch: record messages, send no automatic replies |
 
 
 See `config.example.yaml` for the full annotated reference.
@@ -368,12 +369,25 @@ phone layout with a bottom tab bar.
 
 | Page              | What it does |
 | ----------------- | ------------ |
-| Overview          | Today's numbers with 7-day sparklines, hour-by-hour outcomes (replied / handed to Claude / silent), message pipeline, weekday × hour heatmap, per-chat table, and the reply-engine switch (Gemini / Claude / Both) |
+| Overview          | Today's numbers with 7-day sparklines, hour-by-hour outcomes (replied / handed to Claude / silent), message pipeline, weekday × hour heatmap, per-chat table, the reply-engine switch (Gemini / Claude / Both) and the Pause replies button |
 | Live queue        | Claude mediator queue: read context, reply in your voice or stay silent; unknown senders with one-click allow/dismiss |
 | Conversations     | Per-chat message history with tool and decision traces |
 | Voice & persona   | Voice fingerprint (your phone-typed messages vs Talky's: length, bursts, emoji, casing) above the persona editors |
 | Access rules      | Direct-chat mode, allowlists, mutes, reply behaviour |
 | Settings          | Gemini model, WhatsApp pairing QR, relink / repair / factory reset, read-only config |
+
+**Pause replies.** The Overview button (or `repliesPaused: true` in `config.yaml` /
+`POST /api/config`) is a kill switch that takes effect immediately, without a restart.
+While paused Talky still records every message to `data/chats/`, still queues it for the
+Claude mediator and still extracts memory from direct chats (group messages are not
+mined for memory while paused), but it sends nothing on its own: no Gemini
+auto-replies (logged as `decision=PAUSED`, counted as silent), no proactive startup
+messages, and no `claudeTriggerCommand` spawn. `POST /api/claude/send` and `/send-file`
+answer `409 {"error":"replies are paused"}` unless the body has `"force": true` (the Live
+queue composer sets it, because a human is typing). Self-chat keeps working — while paused
+every self-message goes to the built-in assistant, even with the Claude mediator on — and scheduled
+reminders / the daily digest you set up yourself are still delivered. Every page shows a
+PAUSED status and a banner with a Resume button.
 
 All analytics come from files Talky already writes (`data/chats/`, `data/logs/decisions.md`,
 `data/claude/*.jsonl`) via `GET /api/stats/overview`.

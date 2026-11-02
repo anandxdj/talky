@@ -58,11 +58,11 @@ scripting); the host/origin/JSON checks always apply.
 
 | Method | Route | Purpose |
 | ------ | ----- | ------- |
-| GET  | `/api/claude/status` | `{ mediatorEnabled, mediatorExclusive, connected, ownJid, pendingCount }` |
+| GET  | `/api/claude/status` | `{ mediatorEnabled, mediatorExclusive, repliesPaused, connected, ownJid, pendingCount }` |
 | GET  | `/api/claude/pending` | Array of pending events (see shape below) |
 | GET  | `/api/claude/chat?jid=<jid>&limit=50` | Last N messages of any chat (from `data/chats/`) |
 | GET  | `/api/claude/media?file=<basename>` | Raw bytes of a saved attachment from `data/media/` |
-| POST | `/api/claude/send` | Body `{ "to": "<jid or phone>", "text": "..." }` — sends with human typing delay; `\|\|\|` splits into multiple messages (max 5) |
+| POST | `/api/claude/send` | Body `{ "to": "<jid or phone>", "text": "..." }` — sends with human typing delay; `\|\|\|` splits into multiple messages (max 5). **409 `{"error":"replies are paused"}` while `repliesPaused` is on** |
 | POST | `/api/claude/ack` | Body `{ "ids": ["..."] }` — removes events from pending, archives to `handled.jsonl` |
 
 Event shape (one per inbound message):
@@ -98,7 +98,9 @@ PDFs) without going through the HTTP media endpoint.
    ```bash
    bun scripts/wait-for-events.ts --timeout-seconds 3600
    ```
-2. On wake: `GET /api/claude/pending` (or parse the watcher's stdout JSON).
+2. On wake: `GET /api/claude/status` first — if `repliesPaused` is true, follow the
+   **Pause replies** rule below (report once, do NOT restart the watcher). Otherwise
+   `GET /api/claude/pending` (or parse the watcher's stdout JSON).
 3. For context, pull history: `GET /api/claude/chat?jid=<chatJid>&limit=30`.
    Read attachments from `media.path` when relevant.
 4. Compose the reply **in the user's voice**: follow `persona/soul.md`,
@@ -108,7 +110,8 @@ PDFs) without going through the HTTP media endpoint.
 5. `POST /api/claude/send` with `{ to: event.chatJid, text }`.
 6. `POST /api/claude/ack` with all handled event ids — even ones you chose not
    to reply to (deciding to stay silent is a valid handling).
-7. Restart the watcher (step 1) and repeat.
+7. Restart the watcher (step 1) and repeat — unless replies are paused (the watcher
+   exits immediately while events are pending, so restarting it would spin).
 
 Etiquette / safety:
 - Groups: only reply when addressed (`mentionedMe`) or clearly relevant; never spam.
@@ -146,7 +149,27 @@ claudeMediatorChats: []         # restrict to specific JIDs (empty = all allowed
 claudeTriggerCommand: ""        # optional shell command spawned on new events (config.yaml only — the API refuses to change it)
                                 # (e.g. headless: claude -p "Handle pending WhatsApp events per CLAUDE.md")
 claudeTriggerCooldownSeconds: 30
+repliesPaused: false            # kill switch ("Pause replies" button in the panel; settable via POST /api/config)
 ```
+
+**Pause replies.** While `repliesPaused: true` Talky still records and queues every
+message, but sends no Gemini auto-replies or proactive messages and does not spawn
+`claudeTriggerCommand`. `POST /api/claude/send` and `/api/claude/send-file` return
+`409 {"error":"replies are paused"}` unless the body carries `"force": true`.
+**Claude sessions must not send while paused and must never set `force`** — `force` is for
+a human sending from the panel. Check `repliesPaused` in `/api/claude/status`; if paused:
+1. Leave events pending (do not ack them) and tell the user once that replies are paused
+   and how many events are waiting.
+2. Do **not** restart `wait-for-events.ts` — it exits at once whenever anything is pending,
+   so the session would wake in a loop. Instead stop, or wait in the background for the
+   user to resume (this exits only once `repliesPaused` is false, then resume step 2):
+   ```bash
+   until curl -s -H "X-Talky-Token: $(cat data/control-token)" http://127.0.0.1:4173/api/claude/status \
+     | grep -q '"repliesPaused":false'; do sleep 600; done
+   ```
+
+While paused, the owner's self-chat bypasses the queue and goes to the built-in assistant
+(so the owner can still command it without a Claude session answering).
 
 Which chats reach the queue is still governed by the normal Talky policy
 (`directChatMode`, `allowedDirectJids`, `allowedGroupJids`, mutes) — the mediator
@@ -157,7 +180,8 @@ Notes:
   allowlist entry in either form (`<phone>@s.whatsapp.net` or `<lid>@lid`) matches both
   identities of the same contact.
 - **Self-chat routing** — when the mediator is enabled, slash commands in the owner's
-  self-DM go to the built-in assistant; all other self-messages are queued for Claude.
+  self-DM go to the built-in assistant; all other self-messages are queued for Claude
+  (except while `repliesPaused` is on: then every self-message uses the built-in assistant).
 - **Sending non-ASCII** — write the send JSON to a temp file and POST with
   `curl --data-binary @file`; emoji/dashes passed as shell arguments get mangled on Windows.
 
