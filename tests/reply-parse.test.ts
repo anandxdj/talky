@@ -6,6 +6,7 @@ import {
   parseTextToolArgValue,
   parseTextToolCalls,
   splitMediatedText,
+  mediatedTextParts,
   splitReplyOutputToMessages,
   stripParsedToolCallText
 } from "../src/reply/parse";
@@ -150,5 +151,12 @@ describe("stripParsedToolCallText", () => {
   test("leaves normal text untouched (compacted)", () => {
     expect(stripParsedToolCallText("  hello\nworld ")).toBe("hello world");
     expect(stripParsedToolCallText("")).toBe("");
+  });
+});
+
+describe("mediatedTextParts (BUG-04)", () => {
+  test("counts every non-empty part without capping, so the API can reject >5", () => {
+    expect(mediatedTextParts("1|||2|||3|||4|||5|||6")).toHaveLength(6);
+    expect(mediatedTextParts(" a ||| ||| b ")).toEqual(["a", "b"]);
   });
 });

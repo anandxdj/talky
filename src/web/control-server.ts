@@ -28,6 +28,7 @@ import {
 } from "./auth.js";
 import { loadOverviewStats } from "./stats.js";
 import { checkPausedSend } from "../policy/pause.js";
+import { MEDIATED_SEND_MAX_PARTS, mediatedTextParts } from "../reply/parse.js";
 
 const DEFAULT_PORT = process.env.WEB_UI_PORT ? parseInt(process.env.WEB_UI_PORT) : 4173;
 
@@ -416,6 +417,14 @@ export function startControlServer(runtime: WhatsAppAgent) {
                         if (!to || !text.trim()) {
                           return Response.json(
                             { error: "body must include 'to' (jid or phone) and 'text'" },
+                            { status: 400 }
+                          );
+                        }
+                        const partCount = mediatedTextParts(text).length;
+                        if (partCount > MEDIATED_SEND_MAX_PARTS) {
+                          // Reject instead of silently dropping the extra parts.
+                          return Response.json(
+                            { error: `text has ${partCount} '|||' parts; the maximum is ${MEDIATED_SEND_MAX_PARTS}` },
                             { status: 400 }
                           );
                         }

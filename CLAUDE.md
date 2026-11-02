@@ -62,7 +62,7 @@ scripting); the host/origin/JSON checks always apply.
 | GET  | `/api/claude/pending` | Array of pending events (see shape below) |
 | GET  | `/api/claude/chat?jid=<jid>&limit=50` | Last N messages of any chat (from `data/chats/`) |
 | GET  | `/api/claude/media?file=<basename>` | Raw bytes of a saved attachment from `data/media/` |
-| POST | `/api/claude/send` | Body `{ "to": "<jid or phone>", "text": "..." }` — sends with human typing delay; `\|\|\|` splits into multiple messages (max 5). **409 `{"error":"replies are paused"}` while `repliesPaused` is on** |
+| POST | `/api/claude/send` | Body `{ "to": "<jid or phone>", "text": "..." }` — sends with human typing delay; `\|\|\|` splits into multiple messages (max 5; more → 400, nothing sent). **409 `{"error":"replies are paused"}` while `repliesPaused` is on** |
 | POST | `/api/claude/ack` | Body `{ "ids": ["..."] }` — removes events from pending, archives to `handled.jsonl` |
 
 Event shape (one per inbound message):

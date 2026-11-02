@@ -130,9 +130,13 @@ export const MEDIATED_SEND_MAX_PARTS = 5;
  * splitReplyOutputToMessages this does not strip NO_REPLY tokens.
  */
 export function splitMediatedText(text: string): string[] {
+  return mediatedTextParts(text).slice(0, MEDIATED_SEND_MAX_PARTS);
+}
+
+/** All non-empty `|||` parts, uncapped — lets the API reject sends over the limit. */
+export function mediatedTextParts(text: string): string[] {
   return text
     .split("|||")
     .map((part) => compactText(part))
-    .filter((part) => part.length > 0)
-    .slice(0, MEDIATED_SEND_MAX_PARTS);
+    .filter((part) => part.length > 0);
 }
