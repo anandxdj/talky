@@ -107,6 +107,8 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
   const [debugEvents, setDebugEvents] = useState<DebugLogEvent[]>([])
   const personaInitialized = useRef(false)
   const configDirtyRef = useRef(false)
+  /** Server config the current draft was cloned from — Save sends only keys edited since. */
+  const configBaseRef = useRef<TalkyConfig | null>(null)
   const [configDraft, setConfigDraft] = useState<TalkyConfig | null>(null)
   const [configDirty, setConfigDirty] = useState(false)
   const fetchOkRef = useRef(true)
@@ -143,6 +145,7 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
       setConfig(cfg)
       setConfigDraft((prev) => {
         if (configDirtyRef.current && prev) return prev
+        configBaseRef.current = structuredClone(cfg)
         return structuredClone(cfg)
       })
     }
@@ -425,6 +428,7 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
 
   const resetConfigDraft = useCallback(() => {
     if (!config) return
+    configBaseRef.current = structuredClone(config)
     setConfigDraft(structuredClone(config))
     configDirtyRef.current = false
     setConfigDirty(false)
@@ -436,11 +440,20 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
       return
     }
     try {
-      const body = applyPermissionsSliceToConfig(
+      const full = applyPermissionsSliceToConfig(
         configDraft,
         readPermissionsSlice(configDraft),
       )
-      // The pause switch has its own button; a draft cloned before pausing must not undo it.
+      // Send only what was edited on this page. Posting the whole draft would revert anything
+      // changed elsewhere since it was cloned (engine switch, allowed senders, model, pause).
+      const base = configBaseRef.current ?? {}
+      const body: Partial<TalkyConfig> = {}
+      for (const [key, value] of Object.entries(full)) {
+        if (JSON.stringify(value) !== JSON.stringify((base as Record<string, unknown>)[key])) {
+          ;(body as Record<string, unknown>)[key] = value
+        }
+      }
+      // The pause switch has its own button; a draft must never change it.
       delete body.repliesPaused
       await fetchJson<{ success: boolean }>('/api/config', {
         method: 'POST',
