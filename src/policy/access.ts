@@ -93,7 +93,9 @@ export function evaluateChatPolicy(args: {
 }): { allowed: boolean; reason: string } {
   const { config, chatJid, isGroup } = args;
   if (isGroup) {
-    if (config.mutedGroupJids.includes(chatJid)) {
+    // Same matching as the allowlist (trimmed, case-insensitive): a muted entry must never
+    // be weaker than an allowed one.
+    if (isGroupJidAllowed(chatJid, config.mutedGroupJids)) {
       return { allowed: false, reason: "group is muted" };
     }
     if (config.allowedGroupJids.length === 0) {

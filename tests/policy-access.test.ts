@@ -147,6 +147,15 @@ describe("evaluateChatPolicy — groups", () => {
     expect(r).toMatchObject({ allowed: false, reason: "group is muted" });
   });
 
+  test("muted group matches case-insensitively and with whitespace, like the allowlist (BUG-K3)", () => {
+    const mixed = ` ${G.toUpperCase()} `;
+    expect(evaluate(policyConfig({ mutedGroupJids: [mixed], allowedGroupJids: [G] }), G, true)).toMatchObject({
+      allowed: false,
+      reason: "group is muted"
+    });
+    expect(evaluate(policyConfig({ mutedGroupJids: [mixed] }), G, true).allowed).toBe(false);
+  });
+
   test("no group allowlist means every (unmuted) group is allowed", () => {
     expect(evaluate(policyConfig(), G, true)).toMatchObject({
       allowed: true,
