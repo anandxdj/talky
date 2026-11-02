@@ -52,7 +52,12 @@
     "test": "bun test",
     "ui:dev": "cd web-ui && bun run dev",
     "ui:build": "cd web-ui && bun run build",
-    "ui:preview": "cd web-ui && bun run preview"
+    "ui:preview": "cd web-ui && bun run preview",
+    "promo:preview-server": "bun promo/scripts/preview-server.ts",
+    "promo:capture": "node promo/scripts/capture.cjs && node promo/scripts/compose.cjs",
+    "promo:compose": "node promo/scripts/compose.cjs",
+    "promo:render": "node promo/scripts/render.cjs",
+    "promo:draft": "node promo/scripts/render.cjs --draft"
   },
   "dependencies": {
     "@google/genai": "^1.49.0",

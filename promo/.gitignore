@@ -1,0 +1,9 @@
+# Regenerable working files (bun run promo:capture)
+.work/
+hf/assets/
+hf/build/
+hf/layout-*.js
+.hyperframes/
+# intermediate / draft renders
+renders/*.raw.mp4
+renders/*-draft.mp4
