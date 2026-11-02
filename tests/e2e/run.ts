@@ -764,6 +764,21 @@ async function suiteInteractions(pw: PW) {
       assert(before !== after, `arrow did not move focus (${before})`);
     });
 
+    await check(suite, "one non-JSON 200 response does not drop the rest of the poll [BUG-31]", async () => {
+      await goto("/overview");
+      const errorsBefore = consoleErrors.length;
+      await page.route("**/api/logs/events*", (route: any) => route.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html>" }));
+      // A new pending event must still show up although another endpoint in the same poll is broken.
+      writeFileSync(path.join(p.dir, "data", "claude", "pending.jsonl"), JSON.stringify({ id: "5000-POLL", timestampISO: new Date().toISOString(), chatJid: "919876543210@s.whatsapp.net", senderJid: "919876543210@s.whatsapp.net", senderName: "Deep", chatName: "Deep", isGroup: false, mentionedMe: false, text: "poll check" }) + "\n");
+      await goto("/queue");
+      await page.getByText("poll check").first().waitFor({ timeout: 8000 });
+      await page.unroute("**/api/logs/events*");
+      // The broken endpoint is now caught and logged as a warning — that is the expected outcome.
+      const injected = consoleErrors.splice(errorsBefore);
+      assert(injected.every((e) => e.includes("/api/logs/events")), `other errors: ${injected.join(" | ")}`);
+      await p.api("/api/claude/ack", { method: "POST", json: { ids: ["5000-POLL"] } });
+    });
+
     await check(suite, "no unexpected console errors during interactions", async () => {
       // 500s injected by the mocked-failure checks above are asserted in those checks.
       eq(consoleErrors.filter((e) => !/status of 500|→ 500/.test(e)), [], "console errors");

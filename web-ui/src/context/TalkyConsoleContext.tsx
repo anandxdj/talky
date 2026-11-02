@@ -85,7 +85,9 @@ async function fetchJsonSafe<T>(path: string): Promise<T | null> {
       console.warn(`[Talky UI] ${path} → ${res.status}`)
       return null
     }
-    return res.json() as Promise<T>
+    // Awaited so a non-JSON 200 (e.g. a dev-server fallback page) is caught here instead of
+    // rejecting the whole poll's Promise.all.
+    return (await res.json()) as T
   } catch (e) {
     console.warn(`[Talky UI] ${path}`, e)
     return null
