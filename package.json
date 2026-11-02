@@ -50,6 +50,8 @@
     "memory:export": "bun run src/cli.ts memory:export",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:e2e": "bun tests/e2e/run.ts",
+    "preview:demo": "bun scripts/preview-server.ts",
     "ui:dev": "cd web-ui && bun run dev",
     "ui:build": "cd web-ui && bun run build",
     "ui:preview": "cd web-ui && bun run preview"
