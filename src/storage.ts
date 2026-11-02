@@ -32,9 +32,21 @@ function ensureFile(filePath: string, heading: string): void {
 export function appendChatHistory(record: MessageRecord): void {
   const filePath = path.join(CHAT_DIR, `${sanitizeJid(record.chatJid)}.md`);
   ensureFile(filePath, `# Chat: ${record.chatJid}`);
+  appendFileSync(filePath, formatChatHistoryEntry(record), "utf-8");
+}
+
+/**
+ * One chat-history entry: a `- <meta>` header line, then the text with EVERY line indented by
+ * two spaces. Indenting continuation lines keeps multi-line messages intact and stops message
+ * text from being parsed as extra header lines (a contact could otherwise forge history).
+ */
+export function formatChatHistoryEntry(record: MessageRecord): string {
   const userTag = record.role === "outgoing" && record.manualOutbound ? " | user" : "";
-  const line = `- ${record.timestampISO} | ${record.role} | ${record.senderJid}${userTag}\n  ${record.text}\n`;
-  appendFileSync(filePath, line, "utf-8");
+  const body = record.text
+    .split(/\r?\n/)
+    .map((line) => `  ${line}`)
+    .join("\n");
+  return `- ${record.timestampISO} | ${record.role} | ${record.senderJid}${userTag}\n${body}\n`;
 }
 
 export function readRecentChatHistory(chatJid: string, limit: number): string[] {
@@ -270,7 +282,11 @@ export function readDecisionEvents(): DebugLogEvent[] {
 function parseChatEntries(chatJid: string): ChatEntry[] {
   const filePath = path.join(CHAT_DIR, `${sanitizeJid(chatJid)}.md`);
   if (!existsSync(filePath)) return [];
-  const raw = readFileSync(filePath, "utf-8");
+  return parseChatHistoryText(readFileSync(filePath, "utf-8"));
+}
+
+/** Parses the text of a `data/chats/*.md` file (see formatChatHistoryEntry). */
+export function parseChatHistoryText(raw: string): ChatEntry[] {
   const lines = raw.split(/\r?\n/);
   const entries: ChatEntry[] = [];
 
@@ -291,7 +307,21 @@ function parseChatEntries(chatJid: string): ChatEntry[] {
     }
     const manualOutbound = role === "outgoing" && maybeUser === "user";
     const rawNextLine = lines[i + 1] ?? "";
-    const text = rawNextLine.startsWith("  ") ? rawNextLine.slice(2).trim() : rawNextLine.trim();
+    let text: string;
+    if (rawNextLine.startsWith("  ")) {
+      // Every following indented line belongs to this message.
+      const body: string[] = [];
+      let j = i + 1;
+      while (j < lines.length && (lines[j] ?? "").startsWith("  ")) {
+        body.push((lines[j] ?? "").slice(2));
+        j += 1;
+      }
+      text = body.join("\n").trim();
+      i = j - 1;
+    } else {
+      // Legacy files: an unindented first text line.
+      text = rawNextLine.trim();
+    }
     entries.push({
       timestampISO,
       role,
