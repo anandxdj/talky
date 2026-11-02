@@ -84,6 +84,32 @@ function isBareMediaFileName(file: string): boolean {
   );
 }
 
+/**
+ * Content type for a saved attachment. Only types a browser renders inertly are named; anything
+ * else (HTML, SVG, scripts, unknown) stays application/octet-stream, because the panel opens
+ * attachments as same-origin blob URLs and a contact-supplied HTML/SVG file must never run there.
+ */
+export function inertMediaContentType(fileName: string): string {
+  const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+  const types: Record<string, string> = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    gif: "image/gif",
+    webp: "image/webp",
+    pdf: "application/pdf",
+    ogg: "audio/ogg",
+    opus: "audio/ogg",
+    mp3: "audio/mpeg",
+    m4a: "audio/mp4",
+    wav: "audio/wav",
+    mp4: "video/mp4",
+    webm: "video/webm",
+    txt: "text/plain; charset=utf-8"
+  };
+  return types[ext] ?? "application/octet-stream";
+}
+
 function isExistingFile(filePath: string): boolean {
   try {
     return statSync(filePath).isFile();
@@ -301,7 +327,10 @@ export function startControlServer(runtime: WhatsAppAgent) {
                   return Response.json({ error: "media file not found" }, { status: 404 });
                 }
                 return new Response(readFileSync(mediaPath), {
-                  headers: { "Content-Type": "application/octet-stream" }
+                  headers: {
+                    "Content-Type": inertMediaContentType(file),
+                    "X-Content-Type-Options": "nosniff"
+                  }
                 });
             }
             case "models": {

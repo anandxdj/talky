@@ -350,9 +350,26 @@ function ConversationPane({
               // Media is token-protected: fetch it through the authenticated fetch and open a blob.
               e.preventDefault()
               const url = e.currentTarget.getAttribute('href')!
+              const fileName = head.media?.fileName ?? 'attachment'
               void fetch(url)
-                .then((r) => r.blob())
-                .then((b) => window.open(URL.createObjectURL(b), '_blank', 'noopener'))
+                .then(async (r) => {
+                  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+                  const blob = await r.blob()
+                  const objectUrl = URL.createObjectURL(blob)
+                  if (blob.type === 'application/octet-stream') {
+                    // Not viewable in the browser: download it under its real name.
+                    const a = document.createElement('a')
+                    a.href = objectUrl
+                    a.download = fileName
+                    a.click()
+                  } else {
+                    window.open(objectUrl, '_blank', 'noopener')
+                  }
+                  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
+                })
+                .catch((err: unknown) =>
+                  toast.error(`Could not open ${fileName}: ${err instanceof Error ? err.message : String(err)}`),
+                )
             }}
             className="flex items-center gap-3 rounded-lg border p-3 text-sm hover:bg-muted/60"
           >
