@@ -890,6 +890,9 @@ async function suiteScenarios(pw: PW) {
         await page.getByRole("button", { name: /^Send/ }).click();
         await page.getByText(/Send failed/).waitFor({ timeout: 4000 });
         eq(p.sends().length, 0, "nothing recorded as sent");
+        // Retryable server-side condition, not a client error [BUG-28].
+        const r = await p.api("/api/claude/send", { method: "POST", json: { to: "919876543210", text: "hi" } });
+        eq(r.status, 503, "status while disconnected");
       });
     });
   } finally {

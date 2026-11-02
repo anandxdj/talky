@@ -601,7 +601,10 @@ export function startControlServer(runtime: WhatsAppAgent) {
                         );
                 }
             } catch (err: any) {
-                return Response.json({ success: false, error: String(err) }, { status: 400 });
+                // WhatsApp being offline is a temporary server-side condition (retryable), not a bad request.
+                const message = err instanceof Error ? err.message : String(err);
+                const status = /socket not (connected|ready)/i.test(message) ? 503 : 400;
+                return Response.json({ success: false, error: String(err) }, { status });
             }
         }
         
