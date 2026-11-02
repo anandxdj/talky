@@ -1,5 +1,5 @@
 import { serve } from "bun";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { join, resolve, sep } from "path";
 import { CONFIG_PATH, DATA_DIR, PERSONA_CONTACTS_DIR, PERSONA_GROUPS_DIR } from "../config.js";
 import { resolveMediatorSendFile } from "../tools.js";
@@ -72,6 +72,26 @@ function writePersonaProfileFile(kind: "contact" | "group", stem: string, conten
   writeFileSync(join(dir, `${safe}.md`), content, "utf-8");
 }
 
+/** A plain file name inside data/media/ — no separators, no `.`/`..`, no NUL. */
+function isBareMediaFileName(file: string): boolean {
+  return (
+    file.length > 0 &&
+    file !== "." &&
+    !file.includes("/") &&
+    !file.includes("\\") &&
+    !file.includes("..") &&
+    !file.includes("\0")
+  );
+}
+
+function isExistingFile(filePath: string): boolean {
+  try {
+    return statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
 export function startControlServer(runtime: WhatsAppAgent) {
   const guard = guardOptionsFromEnv(DEFAULT_PORT, loadOrCreateControlToken());
   if (!guard.tokenRequired) {
@@ -81,6 +101,11 @@ export function startControlServer(runtime: WhatsAppAgent) {
     port: DEFAULT_PORT,
     // Local-only: the API can send WhatsApp messages (claude/send), so never expose it on the LAN.
     hostname: "127.0.0.1",
+    // Unhandled errors: a JSON body, never Bun's HTML page with source code and a stack trace.
+    error(err: Error) {
+      console.error("[Talky Web UI] request failed:", err);
+      return Response.json({ error: err.message || "internal error" }, { status: 500 });
+    },
     async fetch(req: Request) {
       const url = new URL(req.url);
       
@@ -135,10 +160,11 @@ export function startControlServer(runtime: WhatsAppAgent) {
             }
             case "persona": {
                 const paths = personaPaths();
+                const readOrEmpty = (file: string) => (existsSync(file) ? readFileSync(file, "utf-8") : "");
                 return Response.json({
-                  soul: readFileSync(paths.soul, "utf-8"),
-                  communicationRules: readFileSync(paths.communicationRules, "utf-8"),
-                  recentMemory: readFileSync(paths.recentMemory, "utf-8")
+                  soul: readOrEmpty(paths.soul),
+                  communicationRules: readOrEmpty(paths.communicationRules),
+                  recentMemory: readOrEmpty(paths.recentMemory)
                 });
             }
             case "persona/profiles": {
@@ -156,11 +182,16 @@ export function startControlServer(runtime: WhatsAppAgent) {
                     { status: 400 }
                   );
                 }
-                return Response.json({
-                  stem,
-                  kind,
-                  content: readPersonaProfileFile(kind, stem)
-                });
+                let content: string;
+                try {
+                  content = readPersonaProfileFile(kind, stem);
+                } catch (err: unknown) {
+                  return Response.json(
+                    { error: err instanceof Error ? err.message : String(err) },
+                    { status: 400 }
+                  );
+                }
+                return Response.json({ stem, kind, content });
             }
             // --- Claude mediator bridge (see CLAUDE.md → "WhatsApp Mediator Protocol") ---
             case "claude/status": {
@@ -223,11 +254,11 @@ export function startControlServer(runtime: WhatsAppAgent) {
             }
             case "claude/transcribe-media": {
                 const file = url.searchParams.get("file")?.trim() ?? "";
-                if (!file || file.includes("/") || file.includes("\\") || file.includes("..")) {
+                if (!isBareMediaFileName(file)) {
                   return Response.json({ error: "file must be a bare filename from data/media/" }, { status: 400 });
                 }
                 const mediaPath = join(MEDIA_INBOX_DIR, file);
-                if (!existsSync(mediaPath)) {
+                if (!isExistingFile(mediaPath)) {
                   return Response.json({ error: "file not found" }, { status: 404 });
                 }
                 try {
@@ -258,14 +289,14 @@ export function startControlServer(runtime: WhatsAppAgent) {
             }
             case "claude/media": {
                 const file = url.searchParams.get("file")?.trim() ?? "";
-                if (!file || file.includes("/") || file.includes("\\") || file.includes("..")) {
+                if (!isBareMediaFileName(file)) {
                   return Response.json(
                     { error: "file query param must be a bare filename from data/media/" },
                     { status: 400 }
                   );
                 }
                 const mediaPath = join(MEDIA_INBOX_DIR, file);
-                if (!existsSync(mediaPath)) {
+                if (!isExistingFile(mediaPath)) {
                   return Response.json({ error: "media file not found" }, { status: 404 });
                 }
                 return new Response(readFileSync(mediaPath), {
