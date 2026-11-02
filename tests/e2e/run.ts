@@ -509,6 +509,16 @@ async function suiteInteractions(pw: PW) {
       await p.api("/api/claude/ack", { method: "POST", json: { ids: ["3000-ACK1"] } });
     });
 
+    await check(suite, "overdue bar is measured from the oldest waiting message [BUG-25]", async () => {
+      const ev = (id: string, minutesAgo: number) =>
+        JSON.stringify({ id, timestampISO: new Date(Date.now() - minutesAgo * 60_000).toISOString(), chatJid: "919876543210@s.whatsapp.net", senderJid: "919876543210@s.whatsapp.net", senderName: "Deep", chatName: "Deep", isGroup: false, mentionedMe: false, text: minutesAgo ? "first" : "?" });
+      writeFileSync(path.join(p.dir, "data", "claude", "pending.jsonl"), `${ev("4000-OLD", 40)}\n${ev("4001-NEW", 0)}\n`);
+      await goto("/queue");
+      const row = page.getByRole("button", { name: /Deep/ }).first();
+      assert((await row.innerText()).includes("over 15m target"), `row: ${(await row.innerText()).replace(/\n/g, " | ")}`);
+      await p.api("/api/claude/ack", { method: "POST", json: { ids: ["4000-OLD", "4001-NEW"] } });
+    });
+
     await check(suite, "attachment opens with its real type, not as an unnamed octet-stream [BUG-19]", async () => {
       const media = await p.api(`/api/claude/media?file=${encodeURIComponent("2026-06-05T10-15-00-000Z_deep_ABC.pdf")}`);
       eq(media.status, 200, "status");

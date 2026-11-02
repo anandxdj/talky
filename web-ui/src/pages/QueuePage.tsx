@@ -37,8 +37,21 @@ function ageMinutes(iso: string): number {
   return Math.max(0, (Date.now() - Date.parse(iso)) / 60_000)
 }
 
-function QueueItem({ event, count, active, onSelect }: { event: ClaudeEvent; count: number; active: boolean; onSelect: () => void }) {
-  const age = ageMinutes(event.timestampISO)
+function QueueItem({
+  event,
+  waitingSinceISO,
+  count,
+  active,
+  onSelect,
+}: {
+  event: ClaudeEvent
+  /** Oldest unanswered event in the thread — the response target runs from here, not the newest. */
+  waitingSinceISO: string
+  count: number
+  active: boolean
+  onSelect: () => void
+}) {
+  const age = ageMinutes(waitingSinceISO)
   const late = age >= TARGET_MINUTES
   return (
     <button
@@ -536,6 +549,7 @@ export function QueuePage() {
                 <QueueItem
                   key={head.chatJid}
                   event={head}
+                  waitingSinceISO={t[0]!.timestampISO}
                   count={t.length}
                   active={selectedThread === t}
                   onSelect={() => select(head.id)}
