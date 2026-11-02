@@ -248,7 +248,9 @@ export function readDebugLogEvents(args?: {
   chatJid?: string;
   limit?: number;
 }): DebugLogEvent[] {
-  const limit = Math.min(500, Math.max(10, Math.floor(args?.limit ?? 250)));
+  // A non-numeric limit (NaN) must fall back to the default, not slice to nothing.
+  const requested = Number.isFinite(args?.limit) ? (args?.limit as number) : 250;
+  const limit = Math.min(500, Math.max(10, Math.floor(requested)));
   const targetChat = args?.chatJid?.trim();
 
   const events: DebugLogEvent[] = [];
