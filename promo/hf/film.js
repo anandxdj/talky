@@ -28,17 +28,25 @@
   // ------------------------------------------------------------------ framing
   // Where the "screen" sits in the frame. Wide: centred. Tall: the product band (168–1330px)
   // under the caption area, per vertical safe zones.
-  const FOCUS = TALL ? { x: W / 2, y: 990 } : { x: W / 2, y: H / 2 - 20 }
+  const FOCUS = TALL ? { x: W / 2, y: 1010 } : { x: W / 2, y: H / 2 - 20 }
   const cam = (cx, cy, s, fx = FOCUS.x, fy = FOCUS.y) => ({ x: fx - cx * s, y: fy - cy * s, scale: s })
+  /** Keep a zoomed-in camera inside the page so the frame never shows past its edge. */
+  const clampCam = (c, pageW, pageH) => {
+    const top = TALL ? 480 : 0
+    if (pageW * c.scale >= W) c.x = Math.min(0, Math.max(W - pageW * c.scale, c.x))
+    if (pageH * c.scale >= H - top) c.y = Math.min(top, Math.max(H - pageH * c.scale, c.y))
+    return c
+  }
   /** Camera that fits a region box (CSS px of the page) into a share of the frame. */
-  const frameBox = (b, fillW, fillH, dy = 0) => {
+  const frameBox = (b, fillW, fillH, dy = 0, page = null) => {
     const s = Math.min((W * fillW) / b.w, (H * fillH) / b.h)
-    return cam(b.x + b.w / 2, b.y + b.h / 2 + dy / s, s)
+    const c = cam(b.x + b.w / 2, b.y + b.h / 2 + dy / s, s)
+    return page ? clampCam(c, page.pageW, page.pageH) : c
   }
   /** Establishing shot: page top-centred, full width (with margin). */
   const establish = (pageW, scaleMul = 1) => {
     const s = (TALL ? (W * 0.9) / pageW : (W * 0.78) / pageW) * scaleMul
-    const topY = TALL ? 560 : 96
+    const topY = TALL ? 530 : 96
     return { x: W / 2 - (pageW / 2) * s, y: topY, scale: s }
   }
 
@@ -97,7 +105,11 @@
         const dur = Math.max(0.2, Math.min(0.65, p.t - prevT))
         tl.to(el, { x: p.x, y: p.y, duration: dur, ease: 'power3.inOut' }, t0 + p.t - dur)
       }
-      if (p.click) {
+      if (p.click && TALL) {
+        // touch: the fingertip shows only around each tap
+        tl.fromTo(`${sel} .arrow`, { opacity: 0, scale: 1.4 }, { opacity: 1, scale: 0.85, duration: 0.18, ease: 'power2.out', immediateRender: false }, t0 + p.t - 0.16)
+        tl.to(`${sel} .arrow`, { opacity: 0, scale: 1.15, duration: 0.3, ease: 'power2.out' }, t0 + p.t + 0.08)
+      } else if (p.click) {
         tl.to(`${sel} .arrow`, { scale: 0.8, duration: 0.07, ease: 'power2.out' }, t0 + p.t - 0.04)
         tl.to(`${sel} .arrow`, { scale: 1, duration: 0.22, ease: 'power3.out' }, t0 + p.t + 0.06)
       }
@@ -144,8 +156,8 @@
   // =================================================================== 2. OVERVIEW
   const tHourly = startOf('#v-hourly')
   const tHeat = startOf('#v-heat')
-  const hourlyCam = TALL ? frameBox(ov.regions.hourly, 0.96, 0.5) : frameBox(ov.regions.hourly, 0.8, 0.66, 50)
-  const heatCam = TALL ? frameBox(ov.regions.heat, 0.96, 0.5) : frameBox(ov.regions.heat, 0.8, 0.66, 50)
+  const hourlyCam = TALL ? frameBox(ov.regions.hourly, 0.96, 0.5, 0, ov) : frameBox(ov.regions.hourly, 0.8, 0.66, 50, ov)
+  const heatCam = TALL ? frameBox(ov.regions.heat, 0.96, 0.5, 0, ov) : frameBox(ov.regions.heat, 0.8, 0.66, 50, ov)
   tl.to('#w-overview', { ...hourlyCam, duration: 1.0, ease: 'power2.inOut' }, tHourly - 0.75)
   caption('#cap-hourly', tHourly + 0.35, tHeat - 0.55)
   tl.to('#w-overview', { ...heatCam, duration: 0.95, ease: 'power2.inOut' }, tHeat - 0.7)
@@ -163,8 +175,9 @@
     ? cam(Q.w / 2, Q.h / 2, (W * 0.94) / Q.w, W / 2, 1000)
     : cam(Q.w / 2, Q.h / 2, Math.min((W * 0.86) / Q.w, (H * 0.86) / Q.h), W / 2, H / 2)
   const qCur = Q.cursor
-  const typePt = qCur.find((p, i) => p.click && i > 1) // first click in the composer
-  const riya = qCur.find((p) => p.click)
+  const clicks = qCur.filter((p) => p.click)
+  const riya = clicks[0] // open Riya's message
+  const typePt = clicks[1] // click into the composer
   tl.set('#w-queue', { ...qFit, scale: qFit.scale * 1.12, x: qFit.x - Q.w * qFit.scale * 0.06, y: qFit.y - Q.h * qFit.scale * 0.06 }, tQueue - 0.08)
   tl.to('#w-queue', { opacity: 1, duration: 0.18, ease: 'power1.out' }, tQueue - 0.08)
   tl.to('#w-queue', { ...qFit, duration: 0.8, ease: 'expo.out' }, tQueue)
@@ -196,9 +209,9 @@
   tl.set('#w-voice', { ...vEst, x: vEst.x + W * 1.2, opacity: 1 }, tVoice - 0.02)
   tl.to('#w-voice', { ...vEst, duration: 0.55, ease: 'expo.out' }, tVoice)
   caption('#cap-voice', tVoice + 0.35, tLen + 1.6)
-  const wordsCam = TALL ? frameBox(V.regions.words, 0.96, 0.4) : frameBox(V.regions.words, 0.74, 0.62, 40)
-  const dumbCam = TALL ? frameBox(V.regions.dumbbell, 0.9, 0.42) : frameBox(V.regions.dumbbell, 0.55, 0.7, 40)
-  const lenCam = TALL ? frameBox(V.regions.lengths, 0.96, 0.4) : frameBox(V.regions.lengths, 0.8, 0.62, 40)
+  const wordsCam = TALL ? frameBox(V.regions.words, 0.96, 0.4, 0, V) : frameBox(V.regions.words, 0.74, 0.62, 40, V)
+  const dumbCam = TALL ? frameBox(V.regions.dumbbell, 0.9, 0.42, 0, V) : frameBox(V.regions.dumbbell, 0.55, 0.7, 40, V)
+  const lenCam = TALL ? frameBox(V.regions.lengths, 0.96, 0.4, 0, V) : frameBox(V.regions.lengths, 0.8, 0.62, 40, V)
   tl.to('#w-voice', { ...wordsCam, duration: 0.9, ease: 'power2.inOut' }, tWords - 0.7)
   tl.to('#w-voice', { ...dumbCam, duration: 0.85, ease: 'power2.inOut' }, tDumb - 0.7)
   tl.to('#w-voice', { ...lenCam, duration: 0.85, ease: 'power2.inOut' }, tLen - 0.7)
@@ -214,7 +227,7 @@
   tl.set('#w-control', { ...cFit, opacity: 0, filter: 'blur(10px)' }, tCtl - 0.05)
   tl.to('#w-control', { opacity: 1, filter: 'blur(0px)', duration: 0.22, ease: 'power2.out' }, tCtl - 0.05)
   const pz = C.regions.pause
-  const pauseCam = TALL ? cam(C.w / 2, pz.y + 120, 1.9) : cam(pz.x - 260, pz.y + 120, 1.7)
+  const pauseCam = clampCam(TALL ? cam(C.w / 2, pz.y + 60, 1.55) : cam(pz.x - 430, pz.y + 110, 1.45), C.w, C.h)
   tl.to('#w-control', { ...pauseCam, duration: 0.8, ease: 'power2.inOut' }, tCtl + 0.1)
   tl.to('#w-control', { ...cFit, duration: 0.9, ease: 'power2.inOut' }, tCtl + C.pauseAt + 0.9)
   cursorTrack('#cur-control', C.cursor, tCtl)

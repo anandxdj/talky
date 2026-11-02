@@ -325,6 +325,18 @@ async function captureQueue(browser, fmt, fmtName, tz, outDir, spec) {
   const at = (t, b, click = false) => cursor.push({ t, ...centerOf(b), click })
 
   const riya = page.locator('button', { hasText: 'are we still on for dinner tonight' }).first()
+  // The list arrives after the first poll; nudge the fake clock until it renders (reload once if not).
+  for (let attempt = 0; !(await riya.isVisible()); attempt += 1) {
+    if (attempt === 40) {
+      await page.reload()
+      await page.clock.runFor(300)
+      await waitReady(page, 'Live queue')
+    }
+    if (attempt > 80) throw new Error('queue item for Riya never rendered')
+    await page.clock.runFor(500)
+    await sleep(150)
+  }
+  await settle(page, 300)
   const riyaBox = await boxOf(page, riya)
   await rec.snap(0)
   cursor.push({ t: 0, x: fmt.viewport.width + 40, y: fmt.viewport.height * 0.75, click: false })

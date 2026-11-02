@@ -60,7 +60,8 @@ function compose(fmt) {
     ? `
       #mark { left: 430px; top: 640px; width: 220px; height: 220px; }
       #hook-title { top: 930px; font-size: 96px; }
-      .cap { top: 250px; }
+      .cap { top: 175px; }
+      #stage { clip-path: inset(480px 0 0 0 round 36px 36px 0 0); }
       .cap .pill { font-size: 70px; line-height: 1.08; padding: 30px 54px 36px; border-radius: 48px; }
       #end-lockup { gap: 34px; }
       #end-mark { width: 170px; height: 170px; }
@@ -116,6 +117,8 @@ function compose(fmt) {
       </div>
       <div id="morph" class="layer"></div>
 
+      <!-- product stage (tall: its own band under the captions) -->
+      <div id="stage" class="layer">
       <!-- 2 · overview: plate with charts at 0, real reveal clips on top -->
       <div id="w-overview" class="world">
         <img class="plate" src="${A}/overview-start.png" alt="" />
@@ -144,6 +147,7 @@ function compose(fmt) {
         ${cursor('cur-control')}
       </div>
 
+      </div>
       <div id="flash" class="layer" data-motion-blur="off"></div>
 
       ${cap('cap-hourly', [['See every reply, hour by hour.', [1, 2]]], [['See every reply,', [1, 2]], ['hour by hour.', []]])}
