@@ -20,7 +20,16 @@ function readStore(): Record<string, UnauthorizedCandidate> {
       return {};
   }
   try {
-      return JSON.parse(readFileSync(UNAUTHORIZED_FILE, "utf-8"));
+      const parsed: unknown = JSON.parse(readFileSync(UNAUTHORIZED_FILE, "utf-8"));
+      // `null`, an array or a number parse fine but are not a store; treat them as empty.
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+      const store: Record<string, UnauthorizedCandidate> = {};
+      for (const [jid, entry] of Object.entries(parsed as Record<string, unknown>)) {
+          if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+              store[jid] = entry as UnauthorizedCandidate;
+          }
+      }
+      return store;
   } catch {
       return {};
   }
@@ -45,7 +54,7 @@ export function recordUnauthorized(
     : undefined;
 
   if (existing) {
-      existing.count += 1;
+      existing.count = (typeof existing.count === "number" ? existing.count : 0) + 1;
       existing.lastSeen = now;
       existing.lastReason = reason;
       if (pushName && !existing.name) existing.name = pushName;
@@ -67,7 +76,7 @@ export function recordUnauthorized(
 
 export function getUnauthorizedCandidates(): UnauthorizedCandidate[] {
   const store = readStore();
-  return Object.values(store).sort((a, b) => b.lastSeen.localeCompare(a.lastSeen));
+  return Object.values(store).sort((a, b) => String(b.lastSeen ?? "").localeCompare(String(a.lastSeen ?? "")));
 }
 
 export function removeUnauthorizedCandidate(jid: string): void {
