@@ -352,10 +352,12 @@ export function startControlServer(runtime: WhatsAppAgent) {
                 let body: Record<string, unknown> = {};
                 if (raw.trim()) {
                   const parsed = JSON.parse(raw) as unknown;
-                  body =
-                    parsed && typeof parsed === "object" && !Array.isArray(parsed)
-                      ? (parsed as Record<string, unknown>)
-                      : {};
+                  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+                    // An array/number/string used to become {} — e.g. POST /api/config [1,2]
+                    // rewrote config.yaml and answered 200.
+                    return Response.json({ error: "request body must be a JSON object" }, { status: 400 });
+                  }
+                  body = parsed as Record<string, unknown>;
                 }
                 switch (path) {
                     case "config": {
