@@ -67,7 +67,9 @@ export function parseTextToolCalls(
 
   const calls: Array<{ id?: string; name: string; args: Record<string, unknown> }> = [];
   for (const found of scanTextToolCalls(text)) {
-    const name = compactText(found.name);
+    // The pattern is case-insensitive and stripParsedToolCallText removes "SEND_GIF(...)" too,
+    // so it must also run — otherwise the call silently vanishes from the reply.
+    const name = compactText(found.name).toLowerCase();
     if (!name || !allowedNames.has(name)) continue;
     calls.push({
       name,

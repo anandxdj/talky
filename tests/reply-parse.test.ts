@@ -102,9 +102,8 @@ describe("parseTextToolCalls", () => {
     ]);
   });
 
-  test("ignores unknown tools and non-lowercase tool names", () => {
+  test("ignores unknown tools", () => {
     expect(parseTextToolCalls("unknown_tool(a=1)")).toEqual([]);
-    expect(parseTextToolCalls("SEND_GIF(query='x')")).toEqual([]);
     expect(parseTextToolCalls("")).toEqual([]);
     expect(parseTextToolCalls("just chatting, no tools")).toEqual([]);
   });
@@ -118,6 +117,15 @@ describe("parseTextToolCalls", () => {
       { name: "send_styled_quote_card", args: { text: "a) b", style: "dark" } },
       { name: "send_sticker", args: {} }
     ]);
+  });
+
+  // BUG-K9: all-caps calls were stripped from the reply text but never executed.
+  test("all-caps / mixed-case tool names run as the lowercase tool", () => {
+    expect(parseTextToolCalls("SEND_GIF(query='x') and Send_Sticker()")).toEqual([
+      { name: "send_gif", args: { query: "x" } },
+      { name: "send_sticker", args: {} }
+    ]);
+    expect(stripParsedToolCallText("ok SEND_GIF(query='x') bye")).toBe("ok bye");
   });
 
   test("an unclosed quote is treated literally (apostrophes in unquoted args still parse)", () => {
