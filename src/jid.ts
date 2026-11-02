@@ -58,10 +58,16 @@ export function normalizeJidInput(input: string): NormalizedJid {
   return { jid: `${digits}${PHONE_SUFFIX}`, kind: "phone", digits };
 }
 
+/**
+ * Normalise to a phone JID (`<digits>@s.whatsapp.net`). A LID (`<digits>@lid`) is returned
+ * as its normalised LID JID, unchanged: LID digits are an opaque WhatsApp identifier, not a
+ * phone number, so rewriting them onto `@s.whatsapp.net` would address a different (or
+ * nonexistent) account. Resolve LID⇒phone via src/lid-map.ts when a mapping is needed.
+ */
 export function toPhoneJid(input: string): string {
   const parsed = normalizeJidInput(input);
-  if (parsed.kind === "phone") return parsed.jid;
-  if (parsed.kind === "lid" || parsed.kind === "raw") {
+  if (parsed.kind === "phone" || parsed.kind === "lid") return parsed.jid;
+  if (parsed.kind === "raw") {
     if (/^\d+$/.test(parsed.digits)) return `${parsed.digits}${PHONE_SUFFIX}`;
   }
   throw new Error(`cannot convert ${parsed.kind} JID to phone JID: ${input}`);

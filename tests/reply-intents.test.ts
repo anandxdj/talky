@@ -65,8 +65,9 @@ describe("inferMemoryFact (prefilter before Gemini classification)", () => {
     expect(inferMemoryFact(`my ${"x".repeat(220)}`)).toBeNull();
   });
 
-  test("known looseness: substring cue 'i ' also matches words ending in i (e.g. 'hi ')", () => {
-    expect(inferMemoryFact("hi bro")).toBe("hi bro");
+  test("'i ' cue needs a word boundary, so words ending in i ('hi bro') are not facts (was a substring bug)", () => {
+    expect(inferMemoryFact("hi bro")).toBeNull();
+    expect(inferMemoryFact("I work at Infosys")).toBe("I work at Infosys");
   });
 });
 
