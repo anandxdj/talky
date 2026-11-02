@@ -7,3 +7,4 @@ hf/layout-*.js
 # intermediate / draft renders
 renders/*.raw.mp4
 renders/*-draft.mp4
+renders/work-*/
