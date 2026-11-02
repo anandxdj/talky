@@ -154,8 +154,9 @@ describe("utils", () => {
     expect(tokenOverlapScore("pizza", "pizza pizza")).toBe(1);
   });
 
-  test("tokenOverlapScore: known limitation — \\W is ASCII-only, so non-Latin text never overlaps", () => {
-    expect(tokenOverlapScore("আমি ভাত খাই", "ভাত")).toBe(0);
+  // BUG-K5: this was a "known limitation" (\W is ASCII-only) asserting 0.
+  test("tokenOverlapScore matches non-Latin words", () => {
+    expect(tokenOverlapScore("আমি ভাত খাই", "ভাত")).toBe(1);
   });
 
   test("jaccardTokenSimilarity ignores tokens of length <= 2", () => {
