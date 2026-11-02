@@ -110,7 +110,8 @@ export function startControlServer(runtime: WhatsAppAgent) {
       const url = new URL(req.url);
       
       // API Routes
-      if (url.pathname.startsWith("/api")) {
+      // "/api" or "/api/…" only — "/apiconfig" is not an API route.
+      if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
         const path =
           url.pathname
             .replace(/^\/api\/?/, "")
