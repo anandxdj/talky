@@ -38,3 +38,16 @@ describe("inferMemoryFact personal cue ('i' as a word)", () => {
     expect(inferMemoryFact(`I ${"x".repeat(220)}`)).toBeNull();
   });
 });
+
+describe("inferMemoryFact personal cue ('my' as a word) (BUG-K6)", () => {
+  test("words ending in 'my' are not personal facts", () => {
+    expect(inferMemoryFact("the army parade was long")).toBeNull();
+    expect(inferMemoryFact("economy is bad these days")).toBeNull();
+    expect(inferMemoryFact("tommy said hello")).toBeNull();
+  });
+
+  test("a real 'my' still counts", () => {
+    expect(inferMemoryFact("my sister lives in Pune")).toBe("my sister lives in Pune");
+    expect(inferMemoryFact("this is my number")).toBe("this is my number");
+  });
+});
