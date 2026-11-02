@@ -65,6 +65,7 @@ const QRCode = resolveQrCodeComponent(ReactQrCodeModule)
 export function ActionsPage() {
   const { sessionAction, status, refresh, config } = useTalkyConsole()
   const [fullResetOpen, setFullResetOpen] = useState(false)
+  const [relinkOpen, setRelinkOpen] = useState(false)
   const [fullResetConfirmText, setFullResetConfirmText] = useState('')
 
   const [geminiModels, setGeminiModels] = useState<GeminiModelOption[]>([])
@@ -205,6 +206,30 @@ export function ActionsPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      <AlertDialog open={relinkOpen} onOpenChange={setRelinkOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Relink WhatsApp?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This deletes <code className="font-mono text-xs">wa_auth/</code> and logs this device out of
+              WhatsApp. Talky stops replying until you scan a new QR code with your phone. Chats, persona and
+              settings are kept.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel type="button">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              type="button"
+              onClick={() => {
+                setRelinkOpen(false)
+                runRelink()
+              }}
+            >
+              Relink and show QR
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <AlertDialog
         open={fullResetOpen}
         onOpenChange={(open: boolean) => {
@@ -394,7 +419,7 @@ export function ActionsPage() {
             </CardDescription>
           </CardHeader>
           <CardFooter>
-            <Button type="button" onClick={runRelink}>
+            <Button type="button" onClick={() => setRelinkOpen(true)}>
               Run relink
             </Button>
           </CardFooter>
