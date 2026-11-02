@@ -106,6 +106,8 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
   const [personaDirty, setPersonaDirty] = useState(false)
   const [debugEvents, setDebugEvents] = useState<DebugLogEvent[]>([])
   const personaInitialized = useRef(false)
+  /** Read when a poll RESOLVES: a poll started before the first keystroke must not overwrite it. */
+  const personaDirtyRef = useRef(false)
   const configDirtyRef = useRef(false)
   /** Server config the current draft was cloned from — Save sends only keys edited since. */
   const configBaseRef = useRef<TalkyConfig | null>(null)
@@ -158,7 +160,7 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
       if (!personaInitialized.current) {
         setEditingPersonaState(per)
         personaInitialized.current = true
-      } else if (!personaDirty) {
+      } else if (!personaDirtyRef.current) {
         setEditingPersonaState(per)
       }
     }
@@ -174,7 +176,7 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
         { duration: 8000 },
       )
     }
-  }, [personaDirty])
+  }, [])
 
   useEffect(() => {
     let alive = true
@@ -228,6 +230,7 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
   )
 
   const setEditingPersona = useCallback((next: PersonaPayload) => {
+    personaDirtyRef.current = true
     setEditingPersonaState(next)
     setPersonaDirty(true)
   }, [])
@@ -239,6 +242,7 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
       body: JSON.stringify(editingPersona),
     })
     toast.success('Persona saved')
+    personaDirtyRef.current = false
     setPersonaDirty(false)
     void fetchData()
   }, [editingPersona, fetchData])
@@ -345,6 +349,7 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
             communicationRules: '',
             recentMemory: '',
           })
+          personaDirtyRef.current = false
           setPersonaDirty(false)
         }
         const path =
