@@ -11,6 +11,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { isClaudeBridgeEvent } from "../src/claude-bridge.js";
 
 const PENDING_PATH = path.join(process.cwd(), "data", "claude", "pending.jsonl");
 
@@ -31,7 +32,9 @@ function readPending(): unknown[] {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
-      events.push(JSON.parse(trimmed));
+      const parsed: unknown = JSON.parse(trimmed);
+      // Same rule as GET /api/claude/pending: `{}`, `null` or an id-less line is not an event.
+      if (isClaudeBridgeEvent(parsed)) events.push(parsed);
     } catch {
       // skip corrupt line
     }

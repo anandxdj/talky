@@ -84,6 +84,45 @@ export function resolveAllowedPath(
   return { ok: true, absolutePath };
 }
 
+/**
+ * File policy for `POST /api/claude/send-file` (Claude mediator attachments).
+ *
+ * Allowed: saved attachments under `mediaDir` (data/media), or anything the share tool may send
+ * (resolveAllowedPath: allowed roots, blocked fragments/extensions). Never allowed: the rest of
+ * `privateDirs` (data/ — chats, memory, the control token) and `privateFiles` (config.yaml), even
+ * when an allowed root (the default on Linux/macOS is the repo itself) contains them.
+ */
+export function resolveMediatorSendFile(
+  requestedPath: string,
+  config: AppConfig,
+  places: { mediaDir: string; privateDirs: string[]; privateFiles: string[] }
+): SafePathResult {
+  const requested = compactText(requestedPath || "");
+  if (!requested || !path.isAbsolute(requested)) {
+    return { ok: false, reason: "path must be an absolute local file path" };
+  }
+  const absolutePath = path.resolve(requested);
+  let resolved: SafePathResult;
+  if (isPathInside(absolutePath, path.resolve(places.mediaDir))) {
+    resolved = { ok: true, absolutePath };
+  } else if (
+    places.privateDirs.some((dir) => isPathInside(absolutePath, path.resolve(dir))) ||
+    places.privateFiles.some((file) => path.resolve(file) === absolutePath)
+  ) {
+    return { ok: false, reason: `path is private to Talky: ${absolutePath}` };
+  } else {
+    resolved = resolveAllowedPath(absolutePath, config, { allowMissing: true });
+    if (!resolved.ok) return resolved;
+  }
+  if (!existsSync(absolutePath) || !statSync(absolutePath).isFile()) {
+    return { ok: false, reason: `file not found: ${absolutePath}` };
+  }
+  if (statSync(absolutePath).size > config.maxShareFileBytes) {
+    return { ok: false, reason: `file exceeds share limit (${config.maxShareFileBytes} bytes)` };
+  }
+  return resolved;
+}
+
 export function listLocalFilesTool(args: {
   path: string;
   recursive?: boolean;

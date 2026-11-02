@@ -105,14 +105,32 @@ describe("buildMediaSendTargets", () => {
     expect(buildMediaSendTargets("12036@g.us")).toEqual(["12036@g.us"]);
   });
 
-  test("phone and lid chats also try the other server form with the same user part", () => {
-    expect(buildMediaSendTargets("91@s.whatsapp.net")).toEqual(["91@s.whatsapp.net", "91@lid"]);
-    expect(buildMediaSendTargets("5@lid")).toEqual(["5@lid", "5@s.whatsapp.net"]);
+  // BUG-K1: the fallback used to be the same digits on the other server — for a @lid chat that
+  // is `<lid-digits>@s.whatsapp.net`, which is not this contact's phone and may be a stranger.
+  const lookup = {
+    phoneDigitsForLid: (lid: string) => (lid === "124245216596056" ? "916291233974" : null),
+    lidDigitsForPhone: (pn: string) => (pn === "916291233974" ? "124245216596056" : null)
+  };
+
+  test("phone and lid chats fall back to the SAME contact's other identity via the LID mapping", () => {
+    expect(buildMediaSendTargets("916291233974@s.whatsapp.net", lookup)).toEqual([
+      "916291233974@s.whatsapp.net",
+      "124245216596056@lid"
+    ]);
+    expect(buildMediaSendTargets("124245216596056@lid", lookup)).toEqual([
+      "124245216596056@lid",
+      "916291233974@s.whatsapp.net"
+    ]);
+  });
+
+  test("without a mapping there is no fallback — never <lid-digits>@s.whatsapp.net", () => {
+    expect(buildMediaSendTargets("5@lid", lookup)).toEqual(["5@lid"]);
+    expect(buildMediaSendTargets("91@s.whatsapp.net", lookup)).toEqual(["91@s.whatsapp.net"]);
   });
 
   test("unknown servers / empty user part pass through", () => {
-    expect(buildMediaSendTargets("x@c.us")).toEqual(["x@c.us"]);
-    expect(buildMediaSendTargets("@lid")).toEqual(["@lid"]);
+    expect(buildMediaSendTargets("x@c.us", lookup)).toEqual(["x@c.us"]);
+    expect(buildMediaSendTargets("@lid", lookup)).toEqual(["@lid"]);
   });
 });
 
@@ -136,8 +154,9 @@ describe("utils", () => {
     expect(tokenOverlapScore("pizza", "pizza pizza")).toBe(1);
   });
 
-  test("tokenOverlapScore: known limitation — \\W is ASCII-only, so non-Latin text never overlaps", () => {
-    expect(tokenOverlapScore("আমি ভাত খাই", "ভাত")).toBe(0);
+  // BUG-K5: this was a "known limitation" (\W is ASCII-only) asserting 0.
+  test("tokenOverlapScore matches non-Latin words", () => {
+    expect(tokenOverlapScore("আমি ভাত খাই", "ভাত")).toBe(1);
   });
 
   test("jaccardTokenSimilarity ignores tokens of length <= 2", () => {

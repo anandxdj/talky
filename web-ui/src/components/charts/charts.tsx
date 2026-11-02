@@ -6,7 +6,7 @@
  * colour, a legend for every multi-series chart, and a hover/focus readout on every plot.
  * Colours come from CSS variables in `index.css`, so light/dark are both handled there.
  */
-import { useId, useMemo, useState, type ReactNode } from 'react'
+import { useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
 export type Series = { key: string; label: string; color: string }
@@ -234,6 +234,32 @@ export function Heatmap({
   const [cell, setCell] = useState<{ r: number; c: number } | null>(null)
   const active = cell ?? peak
   const step = (v: number) => (v <= 0 ? 0 : Math.min(7, Math.max(1, Math.ceil((v / max) * 7))))
+  const gridRef = useRef<HTMLDivElement>(null)
+  // Roving tabindex needs arrow keys, otherwise only one cell is reachable by keyboard.
+  const onGridKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const cols = rows[0]?.values.length ?? 0
+    const moves: Record<string, [number, number]> = {
+      ArrowRight: [0, 1],
+      ArrowLeft: [0, -1],
+      ArrowDown: [1, 0],
+      ArrowUp: [-1, 0],
+    }
+    let next: { r: number; c: number } | null = null
+    if (e.key in moves) {
+      const [dr, dc] = moves[e.key]!
+      next = {
+        r: Math.min(rows.length - 1, Math.max(0, active.r + dr)),
+        c: Math.min(cols - 1, Math.max(0, active.c + dc)),
+      }
+    } else if (e.key === 'Home') next = { r: active.r, c: 0 }
+    else if (e.key === 'End') next = { r: active.r, c: cols - 1 }
+    if (!next) return
+    e.preventDefault()
+    setCell(next)
+    gridRef.current
+      ?.querySelector<HTMLElement>(`[data-r="${next.r}"][data-c="${next.c}"]`)
+      ?.focus()
+  }
   return (
     <div className="flex flex-col gap-3">
       <Readout>
@@ -243,7 +269,13 @@ export function Heatmap({
         </strong>
       </Readout>
       <div className="overflow-x-auto">
-        <div className="flex min-w-[560px] flex-col gap-0.5" role="grid" aria-label="Messages by weekday and hour">
+        <div
+          ref={gridRef}
+          className="flex min-w-[560px] flex-col gap-0.5"
+          role="grid"
+          aria-label="Messages by weekday and hour"
+          onKeyDown={onGridKeyDown}
+        >
           {rows.map((row, r) => (
             <div key={row.label} className="flex items-center gap-0.5" role="row">
               <span className="w-9 shrink-0 font-mono text-[11px] text-muted-foreground" role="rowheader">
@@ -255,6 +287,8 @@ export function Heatmap({
                   <span
                     key={c}
                     role="gridcell"
+                    data-r={r}
+                    data-c={c}
                     tabIndex={on ? 0 : -1}
                     aria-label={formatCell(r, c, v)}
                     onMouseEnter={() => setCell({ r, c })}

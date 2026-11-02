@@ -63,6 +63,18 @@ describe("buildDirectIdentifiers", () => {
   test("empty input yields no identifiers", () => {
     expect(buildDirectIdentifiers("   ", lidLookup).size).toBe(0);
   });
+
+  test("non-JID input never yields an empty identifier (BUG-K8)", () => {
+    expect(buildDirectIdentifiers("alice", noLidMapping).has("")).toBe(false);
+    expect([...buildDirectIdentifiers("alice", noLidMapping)]).toEqual(["alice"]);
+  });
+});
+
+describe("isDirectJidAllowed — non-JID entries (BUG-K8)", () => {
+  test("two different non-JIDs do not match each other", () => {
+    expect(isDirectJidAllowed("alice", ["bob"], noLidMapping)).toBe(false);
+    expect(isDirectJidAllowed("alice", ["alice"], noLidMapping)).toBe(true);
+  });
 });
 
 describe("isDirectJidAllowed", () => {
@@ -145,6 +157,15 @@ describe("evaluateChatPolicy — groups", () => {
   test("muted group is denied even if allowlisted", () => {
     const r = evaluate(policyConfig({ mutedGroupJids: [G], allowedGroupJids: [G] }), G, true);
     expect(r).toMatchObject({ allowed: false, reason: "group is muted" });
+  });
+
+  test("muted group matches case-insensitively and with whitespace, like the allowlist (BUG-K3)", () => {
+    const mixed = ` ${G.toUpperCase()} `;
+    expect(evaluate(policyConfig({ mutedGroupJids: [mixed], allowedGroupJids: [G] }), G, true)).toMatchObject({
+      allowed: false,
+      reason: "group is muted"
+    });
+    expect(evaluate(policyConfig({ mutedGroupJids: [mixed] }), G, true).allowed).toBe(false);
   });
 
   test("no group allowlist means every (unmuted) group is allowed", () => {

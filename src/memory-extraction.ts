@@ -55,7 +55,9 @@ export async function classifyMessageForMemory(
     const parsed = tryParseJsonObject(out);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
     const rec = parsed as Record<string, unknown>;
-    const store = Boolean(rec.store);
+    // Models sometimes answer "store": "false"; Boolean("false") is true. Only true / "true" store.
+    const store =
+      rec.store === true || (typeof rec.store === "string" && rec.store.trim().toLowerCase() === "true");
     const conf = typeof rec.confidence === "number" ? rec.confidence : 0.55;
     const factRaw = rec.fact;
     const fact =
@@ -76,7 +78,8 @@ export function inferMemoryFact(text: string): string | null {
   const low = text.toLowerCase();
   // "i " must be the standalone word "i" (word boundary before it) — a bare substring
   // check also matched words ending in "i" ("hi bro", "wifi down") as first-person facts.
-  const personalCue = /\bi /.test(low) || low.includes("my ") || low.includes("i'm ");
+  // "my " needs a word boundary too: as a substring it matched "army ", "economy ", "tommy ".
+  const personalCue = /\bi /.test(low) || /\bmy /.test(low) || low.includes("i'm ");
   const imperativeCue =
     /\b(remember|dont forget|don't forget|note that|keep in mind|remind me|save this)\b/i.test(
       text

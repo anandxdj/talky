@@ -6,6 +6,7 @@ import {
   parseTextToolArgValue,
   parseTextToolCalls,
   splitMediatedText,
+  mediatedTextParts,
   splitReplyOutputToMessages,
   stripParsedToolCallText
 } from "../src/reply/parse";
@@ -101,17 +102,44 @@ describe("parseTextToolCalls", () => {
     ]);
   });
 
-  test("ignores unknown tools and non-lowercase tool names", () => {
+  test("ignores unknown tools", () => {
     expect(parseTextToolCalls("unknown_tool(a=1)")).toEqual([]);
-    expect(parseTextToolCalls("SEND_GIF(query='x')")).toEqual([]);
     expect(parseTextToolCalls("")).toEqual([]);
     expect(parseTextToolCalls("just chatting, no tools")).toEqual([]);
   });
 
-  test("known limitation: a ')' inside a quoted arg truncates the call", () => {
+  // BUG-K4: this used to parse as { query: "'happy (dance" } and leave "')" in the reply text.
+  test("a ')' inside a quoted arg stays in the argument", () => {
     expect(parseTextToolCalls("send_gif(query='happy (dance)')")).toEqual([
-      { name: "send_gif", args: { query: "'happy (dance" } }
+      { name: "send_gif", args: { query: "happy (dance)" } }
     ]);
+    expect(parseTextToolCalls('send_styled_quote_card(text="a) b", style=dark) then send_sticker()')).toEqual([
+      { name: "send_styled_quote_card", args: { text: "a) b", style: "dark" } },
+      { name: "send_sticker", args: {} }
+    ]);
+  });
+
+  // BUG-K9: all-caps calls were stripped from the reply text but never executed.
+  test("all-caps / mixed-case tool names run as the lowercase tool", () => {
+    expect(parseTextToolCalls("SEND_GIF(query='x') and Send_Sticker()")).toEqual([
+      { name: "send_gif", args: { query: "x" } },
+      { name: "send_sticker", args: {} }
+    ]);
+    expect(stripParsedToolCallText("ok SEND_GIF(query='x') bye")).toBe("ok bye");
+  });
+
+  test("an unclosed quote is treated literally (apostrophes in unquoted args still parse)", () => {
+    expect(parseTextToolCalls("send_gif(query=don't stop)")).toEqual([
+      { name: "send_gif", args: { query: "don't stop" } }
+    ]);
+  });
+
+  test("no catastrophic backtracking on hostile incoming text", () => {
+    const hostile = `send_gif(${"'a".repeat(20_000)}`;
+    const started = performance.now();
+    expect(parseTextToolCalls(hostile)).toEqual([]);
+    stripParsedToolCallText(hostile);
+    expect(performance.now() - started).toBeLessThan(500);
   });
 });
 
@@ -147,8 +175,19 @@ describe("stripParsedToolCallText", () => {
     ).toBe("ok done bye");
   });
 
+  test("strips a call whose quoted arg contains ')' completely (BUG-K4)", () => {
+    expect(stripParsedToolCallText("haha send_gif(query='happy (dance)') enjoy")).toBe("haha enjoy");
+  });
+
   test("leaves normal text untouched (compacted)", () => {
     expect(stripParsedToolCallText("  hello\nworld ")).toBe("hello world");
     expect(stripParsedToolCallText("")).toBe("");
+  });
+});
+
+describe("mediatedTextParts (BUG-04)", () => {
+  test("counts every non-empty part without capping, so the API can reject >5", () => {
+    expect(mediatedTextParts("1|||2|||3|||4|||5|||6")).toHaveLength(6);
+    expect(mediatedTextParts(" a ||| ||| b ")).toEqual(["a", "b"]);
   });
 });

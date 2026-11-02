@@ -1,7 +1,8 @@
 import { serve } from "bun";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { join, resolve, sep } from "path";
-import { PERSONA_CONTACTS_DIR, PERSONA_GROUPS_DIR } from "../config.js";
+import { CONFIG_PATH, DATA_DIR, PERSONA_CONTACTS_DIR, PERSONA_GROUPS_DIR } from "../config.js";
+import { resolveMediatorSendFile } from "../tools.js";
 import { GeminiClient } from "../gemini.js";
 import { listGeminiModelsForGenerateContent } from "../gemini-models.js";
 import { applyConfigPatch, loadConfig, loadEnv, saveConfig } from "../config.js";
@@ -28,6 +29,7 @@ import {
 } from "./auth.js";
 import { loadOverviewStats } from "./stats.js";
 import { checkPausedSend } from "../policy/pause.js";
+import { MEDIATED_SEND_MAX_PARTS, mediatedTextParts } from "../reply/parse.js";
 
 const DEFAULT_PORT = process.env.WEB_UI_PORT ? parseInt(process.env.WEB_UI_PORT) : 4173;
 
@@ -70,6 +72,52 @@ function writePersonaProfileFile(kind: "contact" | "group", stem: string, conten
   writeFileSync(join(dir, `${safe}.md`), content, "utf-8");
 }
 
+/** A plain file name inside data/media/ — no separators, no `.`/`..`, no NUL. */
+function isBareMediaFileName(file: string): boolean {
+  return (
+    file.length > 0 &&
+    file !== "." &&
+    !file.includes("/") &&
+    !file.includes("\\") &&
+    !file.includes("..") &&
+    !file.includes("\0")
+  );
+}
+
+/**
+ * Content type for a saved attachment. Only types a browser renders inertly are named; anything
+ * else (HTML, SVG, scripts, unknown) stays application/octet-stream, because the panel opens
+ * attachments as same-origin blob URLs and a contact-supplied HTML/SVG file must never run there.
+ */
+export function inertMediaContentType(fileName: string): string {
+  const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+  const types: Record<string, string> = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    gif: "image/gif",
+    webp: "image/webp",
+    pdf: "application/pdf",
+    ogg: "audio/ogg",
+    opus: "audio/ogg",
+    mp3: "audio/mpeg",
+    m4a: "audio/mp4",
+    wav: "audio/wav",
+    mp4: "video/mp4",
+    webm: "video/webm",
+    txt: "text/plain; charset=utf-8"
+  };
+  return types[ext] ?? "application/octet-stream";
+}
+
+function isExistingFile(filePath: string): boolean {
+  try {
+    return statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
 export function startControlServer(runtime: WhatsAppAgent) {
   const guard = guardOptionsFromEnv(DEFAULT_PORT, loadOrCreateControlToken());
   if (!guard.tokenRequired) {
@@ -79,11 +127,17 @@ export function startControlServer(runtime: WhatsAppAgent) {
     port: DEFAULT_PORT,
     // Local-only: the API can send WhatsApp messages (claude/send), so never expose it on the LAN.
     hostname: "127.0.0.1",
+    // Unhandled errors: a JSON body, never Bun's HTML page with source code and a stack trace.
+    error(err: Error) {
+      console.error("[Talky Web UI] request failed:", err);
+      return Response.json({ error: err.message || "internal error" }, { status: 500 });
+    },
     async fetch(req: Request) {
       const url = new URL(req.url);
       
       // API Routes
-      if (url.pathname.startsWith("/api")) {
+      // "/api" or "/api/…" only — "/apiconfig" is not an API route.
+      if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
         const path =
           url.pathname
             .replace(/^\/api\/?/, "")
@@ -133,10 +187,11 @@ export function startControlServer(runtime: WhatsAppAgent) {
             }
             case "persona": {
                 const paths = personaPaths();
+                const readOrEmpty = (file: string) => (existsSync(file) ? readFileSync(file, "utf-8") : "");
                 return Response.json({
-                  soul: readFileSync(paths.soul, "utf-8"),
-                  communicationRules: readFileSync(paths.communicationRules, "utf-8"),
-                  recentMemory: readFileSync(paths.recentMemory, "utf-8")
+                  soul: readOrEmpty(paths.soul),
+                  communicationRules: readOrEmpty(paths.communicationRules),
+                  recentMemory: readOrEmpty(paths.recentMemory)
                 });
             }
             case "persona/profiles": {
@@ -154,11 +209,16 @@ export function startControlServer(runtime: WhatsAppAgent) {
                     { status: 400 }
                   );
                 }
-                return Response.json({
-                  stem,
-                  kind,
-                  content: readPersonaProfileFile(kind, stem)
-                });
+                let content: string;
+                try {
+                  content = readPersonaProfileFile(kind, stem);
+                } catch (err: unknown) {
+                  return Response.json(
+                    { error: err instanceof Error ? err.message : String(err) },
+                    { status: 400 }
+                  );
+                }
+                return Response.json({ stem, kind, content });
             }
             // --- Claude mediator bridge (see CLAUDE.md → "WhatsApp Mediator Protocol") ---
             case "claude/status": {
@@ -221,11 +281,11 @@ export function startControlServer(runtime: WhatsAppAgent) {
             }
             case "claude/transcribe-media": {
                 const file = url.searchParams.get("file")?.trim() ?? "";
-                if (!file || file.includes("/") || file.includes("\\") || file.includes("..")) {
+                if (!isBareMediaFileName(file)) {
                   return Response.json({ error: "file must be a bare filename from data/media/" }, { status: 400 });
                 }
                 const mediaPath = join(MEDIA_INBOX_DIR, file);
-                if (!existsSync(mediaPath)) {
+                if (!isExistingFile(mediaPath)) {
                   return Response.json({ error: "file not found" }, { status: 404 });
                 }
                 try {
@@ -256,18 +316,21 @@ export function startControlServer(runtime: WhatsAppAgent) {
             }
             case "claude/media": {
                 const file = url.searchParams.get("file")?.trim() ?? "";
-                if (!file || file.includes("/") || file.includes("\\") || file.includes("..")) {
+                if (!isBareMediaFileName(file)) {
                   return Response.json(
                     { error: "file query param must be a bare filename from data/media/" },
                     { status: 400 }
                   );
                 }
                 const mediaPath = join(MEDIA_INBOX_DIR, file);
-                if (!existsSync(mediaPath)) {
+                if (!isExistingFile(mediaPath)) {
                   return Response.json({ error: "media file not found" }, { status: 404 });
                 }
                 return new Response(readFileSync(mediaPath), {
-                  headers: { "Content-Type": "application/octet-stream" }
+                  headers: {
+                    "Content-Type": inertMediaContentType(file),
+                    "X-Content-Type-Options": "nosniff"
+                  }
                 });
             }
             case "models": {
@@ -318,10 +381,12 @@ export function startControlServer(runtime: WhatsAppAgent) {
                 let body: Record<string, unknown> = {};
                 if (raw.trim()) {
                   const parsed = JSON.parse(raw) as unknown;
-                  body =
-                    parsed && typeof parsed === "object" && !Array.isArray(parsed)
-                      ? (parsed as Record<string, unknown>)
-                      : {};
+                  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+                    // An array/number/string used to become {} — e.g. POST /api/config [1,2]
+                    // rewrote config.yaml and answered 200.
+                    return Response.json({ error: "request body must be a JSON object" }, { status: 400 });
+                  }
+                  body = parsed as Record<string, unknown>;
                 }
                 switch (path) {
                     case "config": {
@@ -331,9 +396,21 @@ export function startControlServer(runtime: WhatsAppAgent) {
                         return Response.json({ success: true, config: newConfig, rejectedKeys });
                     }
                     case "unauthorized/resolve": {
-                        const jid = typeof body.jid === "string" ? body.jid : "";
+                        const jid = typeof body.jid === "string" ? body.jid.trim() : "";
                         const action = typeof body.action === "string" ? body.action : "";
-                        const listType = typeof body.listType === "string" ? body.listType : "";
+                        if (!jid || (action !== "allow" && action !== "discard")) {
+                          return Response.json(
+                            { error: "body must include 'jid' and action 'allow' or 'discard'" },
+                            { status: 400 }
+                          );
+                        }
+                        // Missing/unknown listType: decide from the JID, never default to groups.
+                        const listType =
+                          body.listType === "direct" || body.listType === "group"
+                            ? body.listType
+                            : jid.endsWith("@g.us")
+                              ? "group"
+                              : "direct";
                         if (action === "allow") {
                             const config = loadConfig();
                             if (listType === "direct") {
@@ -419,6 +496,14 @@ export function startControlServer(runtime: WhatsAppAgent) {
                             { status: 400 }
                           );
                         }
+                        const partCount = mediatedTextParts(text).length;
+                        if (partCount > MEDIATED_SEND_MAX_PARTS) {
+                          // Reject instead of silently dropping the extra parts.
+                          return Response.json(
+                            { error: `text has ${partCount} '|||' parts; the maximum is ${MEDIATED_SEND_MAX_PARTS}` },
+                            { status: 400 }
+                          );
+                        }
                         const sent = await runtime.sendMediatedText(to, text);
                         return Response.json({ success: true, ...sent });
                     }
@@ -435,12 +520,23 @@ export function startControlServer(runtime: WhatsAppAgent) {
                             { status: 400 }
                           );
                         }
-                        if (!existsSync(filePath)) {
-                          return Response.json({ error: "file not found" }, { status: 404 });
+                        // Same policy as the share tool, plus Talky's own data/ (token, chats)
+                        // and config.yaml are never sendable; saved attachments are.
+                        const allowedFile = resolveMediatorSendFile(filePath, loadConfig(), {
+                          mediaDir: MEDIA_INBOX_DIR,
+                          privateDirs: [DATA_DIR],
+                          privateFiles: [CONFIG_PATH]
+                        });
+                        if (!allowedFile.ok || !allowedFile.absolutePath) {
+                          const missing = (allowedFile.reason ?? "").startsWith("file not found");
+                          return Response.json(
+                            { error: allowedFile.reason ?? "file not allowed" },
+                            { status: missing ? 404 : 403 }
+                          );
                         }
                         const sentFile = await runtime.sendMediatedFile({
                           to,
-                          absolutePath: filePath,
+                          absolutePath: allowedFile.absolutePath,
                           fileName: typeof body.fileName === "string" ? body.fileName : undefined,
                           caption: typeof body.caption === "string" ? body.caption : undefined
                         });
@@ -505,7 +601,10 @@ export function startControlServer(runtime: WhatsAppAgent) {
                         );
                 }
             } catch (err: any) {
-                return Response.json({ success: false, error: String(err) }, { status: 400 });
+                // WhatsApp being offline is a temporary server-side condition (retryable), not a bad request.
+                const message = err instanceof Error ? err.message : String(err);
+                const status = /socket not (connected|ready)/i.test(message) ? 503 : 400;
+                return Response.json({ success: false, error: String(err) }, { status });
             }
         }
         

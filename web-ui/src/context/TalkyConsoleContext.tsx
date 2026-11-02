@@ -85,7 +85,9 @@ async function fetchJsonSafe<T>(path: string): Promise<T | null> {
       console.warn(`[Talky UI] ${path} → ${res.status}`)
       return null
     }
-    return res.json() as Promise<T>
+    // Awaited so a non-JSON 200 (e.g. a dev-server fallback page) is caught here instead of
+    // rejecting the whole poll's Promise.all.
+    return (await res.json()) as T
   } catch (e) {
     console.warn(`[Talky UI] ${path}`, e)
     return null
@@ -106,7 +108,11 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
   const [personaDirty, setPersonaDirty] = useState(false)
   const [debugEvents, setDebugEvents] = useState<DebugLogEvent[]>([])
   const personaInitialized = useRef(false)
+  /** Read when a poll RESOLVES: a poll started before the first keystroke must not overwrite it. */
+  const personaDirtyRef = useRef(false)
   const configDirtyRef = useRef(false)
+  /** Server config the current draft was cloned from — Save sends only keys edited since. */
+  const configBaseRef = useRef<TalkyConfig | null>(null)
   const [configDraft, setConfigDraft] = useState<TalkyConfig | null>(null)
   const [configDirty, setConfigDirty] = useState(false)
   const fetchOkRef = useRef(true)
@@ -143,6 +149,7 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
       setConfig(cfg)
       setConfigDraft((prev) => {
         if (configDirtyRef.current && prev) return prev
+        configBaseRef.current = structuredClone(cfg)
         return structuredClone(cfg)
       })
     }
@@ -155,7 +162,7 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
       if (!personaInitialized.current) {
         setEditingPersonaState(per)
         personaInitialized.current = true
-      } else if (!personaDirty) {
+      } else if (!personaDirtyRef.current) {
         setEditingPersonaState(per)
       }
     }
@@ -171,7 +178,7 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
         { duration: 8000 },
       )
     }
-  }, [personaDirty])
+  }, [])
 
   useEffect(() => {
     let alive = true
@@ -225,17 +232,26 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
   )
 
   const setEditingPersona = useCallback((next: PersonaPayload) => {
+    personaDirtyRef.current = true
     setEditingPersonaState(next)
     setPersonaDirty(true)
   }, [])
 
   const savePersona = useCallback(async () => {
-    await fetchJson('/api/persona', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editingPersona),
-    })
+    try {
+      await fetchJson('/api/persona', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editingPersona),
+      })
+    } catch (e) {
+      // Callers fire-and-forget; report here instead of leaking an unhandled rejection.
+      console.error('[Talky UI] save persona', e)
+      toast.error('Could not save persona — your edits are kept. Is Talky running?')
+      return
+    }
     toast.success('Persona saved')
+    personaDirtyRef.current = false
     setPersonaDirty(false)
     void fetchData()
   }, [editingPersona, fetchData])
@@ -246,11 +262,17 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
       action: 'allow' | 'discard',
       listType: 'direct' | 'group',
     ) => {
-      await fetchJson('/api/unauthorized/resolve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jid, action, listType }),
-      })
+      try {
+        await fetchJson('/api/unauthorized/resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jid, action, listType }),
+        })
+      } catch (e) {
+        console.error('[Talky UI] resolve unknown sender', e)
+        toast.error(`Could not ${action === 'allow' ? 'allow' : 'dismiss'} ${jid} — is Talky running?`)
+        return
+      }
       toast.success(action === 'allow' ? 'Allowed' : 'Dismissed')
       void fetchData()
     },
@@ -342,6 +364,7 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
             communicationRules: '',
             recentMemory: '',
           })
+          personaDirtyRef.current = false
           setPersonaDirty(false)
         }
         const path =
@@ -381,7 +404,7 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
         }
         toast.message(
           action === 'full-relink'
-            ? 'Factory reset complete — local data wiped. Scan the new QR in Actions or terminal.'
+            ? 'Factory reset complete — local data wiped. Scan the new QR in Settings or the terminal.'
             : `Session ${action} initiated`,
         )
         void fetchData()
@@ -425,6 +448,7 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
 
   const resetConfigDraft = useCallback(() => {
     if (!config) return
+    configBaseRef.current = structuredClone(config)
     setConfigDraft(structuredClone(config))
     configDirtyRef.current = false
     setConfigDirty(false)
@@ -436,11 +460,20 @@ export function TalkyConsoleProvider({ children }: { children: ReactNode }) {
       return
     }
     try {
-      const body = applyPermissionsSliceToConfig(
+      const full = applyPermissionsSliceToConfig(
         configDraft,
         readPermissionsSlice(configDraft),
       )
-      // The pause switch has its own button; a draft cloned before pausing must not undo it.
+      // Send only what was edited on this page. Posting the whole draft would revert anything
+      // changed elsewhere since it was cloned (engine switch, allowed senders, model, pause).
+      const base = configBaseRef.current ?? {}
+      const body: Partial<TalkyConfig> = {}
+      for (const [key, value] of Object.entries(full)) {
+        if (JSON.stringify(value) !== JSON.stringify((base as Record<string, unknown>)[key])) {
+          ;(body as Record<string, unknown>)[key] = value
+        }
+      }
+      // The pause switch has its own button; a draft must never change it.
       delete body.repliesPaused
       await fetchJson<{ success: boolean }>('/api/config', {
         method: 'POST',

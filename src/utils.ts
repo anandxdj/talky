@@ -5,8 +5,12 @@ export function sleep(ms: number): Promise<void> {
 }
 
 export function randomBetween(min: number, max: number): number {
-  if (max <= min) return min;
-  const value = crypto.randomInt(min, max + 1);
+  // crypto.randomInt throws on non-integer bounds; delays scaled by "slower" instructions
+  // (×1.5) or a fractional value in config.yaml are not integers. Same result for integers.
+  const lo = Math.ceil(min);
+  const hi = Math.floor(max);
+  if (hi <= lo) return lo;
+  const value = crypto.randomInt(lo, hi + 1);
   return value;
 }
 
@@ -18,9 +22,15 @@ export function compactText(input: string): string {
   return input.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Word tokens in any script. `\W` is ASCII-only, so Bengali/Devanagari/Arabic words (whose
+ * vowel signs are combining marks) were split apart or dropped and never matched.
+ */
+const WORD_SPLIT = /[^\p{L}\p{M}\p{N}_]+/u;
+
 export function tokenOverlapScore(text: string, query: string): number {
-  const a = new Set(text.toLowerCase().split(/\W+/).filter(Boolean));
-  const b = new Set(query.toLowerCase().split(/\W+/).filter(Boolean));
+  const a = new Set(text.toLowerCase().split(WORD_SPLIT).filter(Boolean));
+  const b = new Set(query.toLowerCase().split(WORD_SPLIT).filter(Boolean));
   if (!a.size || !b.size) return 0;
   let overlap = 0;
   for (const token of b) {
@@ -31,8 +41,8 @@ export function tokenOverlapScore(text: string, query: string): number {
 
 /** Jaccard similarity on word tokens (length > 2), used for memory deduplication. */
 export function jaccardTokenSimilarity(a: string, b: string): number {
-  const ta = new Set(a.toLowerCase().split(/\W+/).filter((t) => t.length > 2));
-  const tb = new Set(b.toLowerCase().split(/\W+/).filter((t) => t.length > 2));
+  const ta = new Set(a.toLowerCase().split(WORD_SPLIT).filter((t) => t.length > 2));
+  const tb = new Set(b.toLowerCase().split(WORD_SPLIT).filter((t) => t.length > 2));
   if (ta.size === 0 || tb.size === 0) return 0;
   let overlap = 0;
   for (const token of ta) {

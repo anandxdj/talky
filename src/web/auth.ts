@@ -55,7 +55,7 @@ export function guardOptionsFromEnv(port: number, token: string): GuardOptions {
   const flag = (process.env.TALKY_API_TOKEN ?? "").trim().toLowerCase();
   const extraOrigins = (process.env.TALKY_ALLOWED_ORIGINS ?? "")
     .split(",")
-    .map((value) => value.trim().replace(/\/+$/, ""))
+    .map((value) => value.trim().replace(/\/+$/, "").toLowerCase())
     .filter(Boolean);
   return { port, token, tokenRequired: flag !== "off", extraOrigins };
 }
@@ -96,7 +96,8 @@ export function checkRequestOrigin(req: Request, opts: GuardOptions): Response |
   }
 
   const origin = req.headers.get("origin");
-  if (origin && origin !== "null" && !allowedOrigins(opts).has(origin.replace(/\/+$/, ""))) {
+  // Scheme and host are case-insensitive (browsers send them lower-case; scripts may not).
+  if (origin && origin !== "null" && !allowedOrigins(opts).has(origin.replace(/\/+$/, "").toLowerCase())) {
     return deny(403, `Origin ${origin} is not allowed`);
   }
   if (origin === "null") {

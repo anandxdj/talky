@@ -38,3 +38,38 @@ describe("inferMemoryFact personal cue ('i' as a word)", () => {
     expect(inferMemoryFact(`I ${"x".repeat(220)}`)).toBeNull();
   });
 });
+
+describe("inferMemoryFact personal cue ('my' as a word) (BUG-K6)", () => {
+  test("words ending in 'my' are not personal facts", () => {
+    expect(inferMemoryFact("the army parade was long")).toBeNull();
+    expect(inferMemoryFact("economy is bad these days")).toBeNull();
+    expect(inferMemoryFact("tommy said hello")).toBeNull();
+  });
+
+  test("a real 'my' still counts", () => {
+    expect(inferMemoryFact("my sister lives in Pune")).toBe("my sister lives in Pune");
+    expect(inferMemoryFact("this is my number")).toBe("this is my number");
+  });
+});
+
+describe("classifyMessageForMemory store flag (BUG-K7)", () => {
+  const { classifyMessageForMemory } = require("../src/memory-extraction") as typeof import("../src/memory-extraction");
+  const fakeClient = (reply: string) => ({ generate: async () => reply }) as unknown as Parameters<typeof classifyMessageForMemory>[0];
+  const hints = { senderJid: "1@s.whatsapp.net", isGroup: false };
+
+  test('"store": "false" (a string) is not stored', async () => {
+    const out = await classifyMessageForMemory(fakeClient('{"store": "false", "fact": "x", "confidence": 0.9}'), "m", "hello", hints);
+    expect(out?.store).toBe(false);
+  });
+
+  test('"store": true and "true" are stored; other truthy junk is not', async () => {
+    const t = await classifyMessageForMemory(fakeClient('{"store": true, "fact": "Likes chai", "confidence": 0.8}'), "m", "i like chai", hints);
+    expect(t).toMatchObject({ store: true, fact: "Likes chai" });
+    const s = await classifyMessageForMemory(fakeClient('{"store": "TRUE", "fact": "Likes chai"}'), "m", "i like chai", hints);
+    expect(s?.store).toBe(true);
+    for (const junk of ['"no"', "1", '"0"', "null"]) {
+      const j = await classifyMessageForMemory(fakeClient(`{"store": ${junk}, "fact": "x"}`), "m", "hello", hints);
+      expect(j?.store).toBe(false);
+    }
+  });
+});

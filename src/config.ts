@@ -387,17 +387,58 @@ export function applyConfigPatch(
       rejectedKeys.push(key);
       continue;
     }
+    if (typeof value === "number" && !numberInRange(key, value)) {
+      rejectedKeys.push(key);
+      continue;
+    }
     accepted[key] = value;
   }
   // Locked keys keep their current value even if the patch tried to set them.
   const lockedNow: Record<string, unknown> = {};
   for (const key of API_LOCKED_CONFIG_KEYS) lockedNow[key] = (current as Record<string, unknown>)[key];
-  const config = normalizeConfig({ ...current, ...accepted, ...lockedNow } as Partial<AppConfig>);
+  let config = normalizeConfig({ ...current, ...accepted, ...lockedNow } as Partial<AppConfig>);
+  // A value normalisation would change (unknown enum member, out-of-bounds number) is rejected
+  // and the current value kept — never silently replaced by the default or a clamp.
+  for (const [key, value] of Object.entries(accepted)) {
+    if ((typeof value === "string" || typeof value === "number") && (config as Record<string, unknown>)[key] !== value) {
+      rejectedKeys.push(key);
+      delete accepted[key];
+    }
+  }
+  const merged = { ...current, ...accepted };
+  if (merged.minReplyDelayMs > merged.maxReplyDelayMs) {
+    for (const key of ["minReplyDelayMs", "maxReplyDelayMs"] as const) {
+      if (key in accepted) {
+        rejectedKeys.push(key);
+        delete accepted[key];
+      }
+    }
+  }
+  config = normalizeConfig({ ...current, ...accepted, ...lockedNow } as Partial<AppConfig>);
   return { config, rejectedKeys: rejectedKeys.filter((key) => {
     // Unchanged locked values sent back by the UI are not an error.
     if (!API_LOCKED_CONFIG_KEYS.has(key)) return true;
     return JSON.stringify(patch[key]) !== JSON.stringify((current as Record<string, unknown>)[key]);
   }) };
+}
+
+/** Range rules for numeric keys that normalizeConfig does not bound itself (API writes only). */
+const NUMBER_RULES: Record<string, { min: number; max?: number; integer?: boolean }> = {
+  historyWindow: { min: 1, integer: true },
+  senderHistoryWindow: { min: 1, integer: true },
+  selfHistoryWindow: { min: 1, integer: true },
+  memoryTopK: { min: 1, integer: true },
+  dailyMessageLimit: { min: 0, integer: true },
+  minReplyDelayMs: { min: 0 },
+  maxReplyDelayMs: { min: 0 },
+  selfChatDigestHour: { min: 0, max: 23, integer: true }
+};
+
+function numberInRange(key: string, value: number): boolean {
+  if (!Number.isFinite(value)) return false;
+  const rule = NUMBER_RULES[key] ?? { min: 0 };
+  if (rule.integer && !Number.isInteger(value)) return false;
+  return value >= rule.min && (rule.max === undefined || value <= rule.max);
 }
 
 export function saveConfig(config: AppConfig): void {

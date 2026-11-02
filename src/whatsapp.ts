@@ -2973,6 +2973,13 @@ export class WhatsAppAgent {
   }): Promise<{ jid: string; fileName: string }> {
     if (!this.sock) throw new Error("WhatsApp socket not connected");
     const jid = toDirectTargetJid(args.to);
+    if (jid.endsWith("@g.us")) {
+      // Same group rule as sendMediatedText.
+      const permission = await this.checkGroupSendPermission(jid);
+      if (!permission.allowed) {
+        throw new Error(`cannot send to group: ${permission.reason}`);
+      }
+    }
     await this.sendLocalFile({
       chatJid: jid,
       absolutePath: args.absolutePath,

@@ -111,6 +111,16 @@ function ensureBridgeDirs(): void {
   }
 }
 
+/**
+ * What counts as a pending event. Shared with scripts/wait-for-events.ts so the watcher never
+ * wakes a session for lines the API (and therefore ack) cannot see.
+ */
+export function isClaudeBridgeEvent(value: unknown): value is ClaudeBridgeEvent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.id === "string" && typeof record.chatJid === "string";
+}
+
 function readJsonlEvents(filePath: string): ClaudeBridgeEvent[] {
   if (!existsSync(filePath)) return [];
   const events: ClaudeBridgeEvent[] = [];
@@ -118,8 +128,8 @@ function readJsonlEvents(filePath: string): ClaudeBridgeEvent[] {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
-      const parsed = JSON.parse(trimmed) as ClaudeBridgeEvent;
-      if (parsed && typeof parsed.id === "string" && typeof parsed.chatJid === "string") {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (isClaudeBridgeEvent(parsed)) {
         events.push(parsed);
       }
     } catch {

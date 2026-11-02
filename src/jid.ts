@@ -1,4 +1,7 @@
+import { lidDigitsForPhone, phoneDigitsForLid } from "./lid-map";
 import { compactText } from "./utils";
+
+const defaultLidLookup: LidPhoneLookup = { phoneDigitsForLid, lidDigitsForPhone };
 
 const PHONE_SUFFIX = "@s.whatsapp.net";
 const LID_SUFFIX = "@lid";
@@ -82,7 +85,17 @@ export function shouldIgnoreIncomingJid(jid?: string | null): boolean {
   );
 }
 
-export function buildMediaSendTargets(chatJid: string): string[] {
+export type LidPhoneLookup = {
+  phoneDigitsForLid: (lidDigits: string) => string | null;
+  lidDigitsForPhone: (phoneDigits: string) => string | null;
+};
+
+/**
+ * Where to try sending media for a chat: the chat itself, then the SAME contact's other identity
+ * (phone ⇔ LID) when the session has a mapping for it. LID digits are not a phone number, so the
+ * fallback must go through the mapping — `<lid-digits>@s.whatsapp.net` can be a stranger.
+ */
+export function buildMediaSendTargets(chatJid: string, lookup: LidPhoneLookup = defaultLidLookup): string[] {
   const targets = new Set<string>();
   targets.add(chatJid);
 
@@ -96,9 +109,11 @@ export function buildMediaSendTargets(chatJid: string): string[] {
   }
 
   if (chatJid.endsWith("@lid")) {
-    targets.add(`${user}@s.whatsapp.net`);
+    const phone = lookup.phoneDigitsForLid(user);
+    if (phone) targets.add(`${phone}@s.whatsapp.net`);
   } else if (chatJid.endsWith("@s.whatsapp.net")) {
-    targets.add(`${user}@lid`);
+    const lid = lookup.lidDigitsForPhone(user);
+    if (lid) targets.add(`${lid}@lid`);
   }
 
   return [...targets];

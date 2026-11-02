@@ -26,6 +26,9 @@ type ContextPayload = {
   ownerMemories: Array<{ fact: string; confidence: number; source: string }>
 }
 
+/** Server limit for one mediated send (MEDIATED_SEND_MAX_PARTS in src/reply/parse.ts). */
+const MAX_PARTS = 5
+
 function chatTitle(e: ClaudeEvent): string {
   return e.chatName || e.senderName || maskedJid(e.chatJid)
 }
@@ -34,8 +37,21 @@ function ageMinutes(iso: string): number {
   return Math.max(0, (Date.now() - Date.parse(iso)) / 60_000)
 }
 
-function QueueItem({ event, count, active, onSelect }: { event: ClaudeEvent; count: number; active: boolean; onSelect: () => void }) {
-  const age = ageMinutes(event.timestampISO)
+function QueueItem({
+  event,
+  waitingSinceISO,
+  count,
+  active,
+  onSelect,
+}: {
+  event: ClaudeEvent
+  /** Oldest unanswered event in the thread — the response target runs from here, not the newest. */
+  waitingSinceISO: string
+  count: number
+  active: boolean
+  onSelect: () => void
+}) {
+  const age = ageMinutes(waitingSinceISO)
   const late = age >= TARGET_MINUTES
   return (
     <button
@@ -138,23 +154,39 @@ function ConversationPane({
     await apiJson('/api/claude/ack', { method: 'POST', body: JSON.stringify({ ids }) })
   }
 
+  // A ref, not `busy`: two quick ⌘↵ presses run before React re-renders with busy=true.
+  const inFlight = useRef(false)
   const send = async () => {
-    if (parts.length === 0) return
+    // Same rules as the Send button — the keyboard shortcut must not bypass them.
+    if (inFlight.current || parts.length === 0 || parts.length > MAX_PARTS) return
+    inFlight.current = true
     setBusy(true)
     try {
-      await apiJson('/api/claude/send', {
-        method: 'POST',
-        // A human typed this, so it goes out even while automatic replies are paused.
-        body: JSON.stringify({ to: head.chatJid, text: draft, force: true }),
-      })
-      await ack()
-      toast.success(`Sent ${parts.length} message${parts.length === 1 ? '' : 's'} to ${chatTitle(head)}`)
+      try {
+        await apiJson('/api/claude/send', {
+          method: 'POST',
+          // A human typed this, so it goes out even while automatic replies are paused.
+          body: JSON.stringify({ to: head.chatJid, text: draft, force: true }),
+        })
+      } catch (e) {
+        toast.error(`Send failed: ${e instanceof Error ? e.message : String(e)}`)
+        return
+      }
+      // Sent from here on: never say "failed" (a retry would message the contact twice).
+      const sent = `Sent ${parts.length} message${parts.length === 1 ? '' : 's'} to ${chatTitle(head)}`
       setDraft('')
+      try {
+        await ack()
+        toast.success(sent)
+        onDone()
+      } catch (e) {
+        toast.warning(
+          `${sent}, but it could not be marked handled (${e instanceof Error ? e.message : String(e)}). Use Stay silent to clear it — do not send again.`,
+        )
+      }
       void refresh()
-      onDone()
-    } catch (e) {
-      toast.error(`Send failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
+      inFlight.current = false
       setBusy(false)
     }
   }
@@ -245,7 +277,11 @@ function ConversationPane({
             <span aria-hidden className="size-2 rounded-[2px] bg-series-claude" />
             <span className="font-semibold">Reply as you</span>
             <span className="text-[#c3c2b7]">
-              {parts.length > 1 ? `${parts.length} messages` : 'Separate messages with |||'}
+              {parts.length > MAX_PARTS
+                ? `${parts.length} messages — max ${MAX_PARTS}`
+                : parts.length > 1
+                  ? `${parts.length} messages`
+                  : 'Separate messages with |||'}
             </span>
             {paused ? (
               <span className="font-mono text-xs text-[var(--status-warning)]">
@@ -273,7 +309,7 @@ function ConversationPane({
             <Button variant="ghost" disabled={busy} onClick={() => void staySilent()}>
               <X /> Stay silent
             </Button>
-            <Button className="ml-auto" disabled={busy || parts.length === 0 || parts.length > 5} onClick={() => void send()}>
+            <Button className="ml-auto" disabled={busy || parts.length === 0 || parts.length > MAX_PARTS} onClick={() => void send()}>
               <Send /> Send
               <kbd className="ml-1 hidden rounded bg-primary-foreground/15 px-1.5 font-mono text-[11px] sm:inline">⌘↵</kbd>
             </Button>
@@ -327,9 +363,26 @@ function ConversationPane({
               // Media is token-protected: fetch it through the authenticated fetch and open a blob.
               e.preventDefault()
               const url = e.currentTarget.getAttribute('href')!
+              const fileName = head.media?.fileName ?? 'attachment'
               void fetch(url)
-                .then((r) => r.blob())
-                .then((b) => window.open(URL.createObjectURL(b), '_blank', 'noopener'))
+                .then(async (r) => {
+                  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+                  const blob = await r.blob()
+                  const objectUrl = URL.createObjectURL(blob)
+                  if (blob.type === 'application/octet-stream') {
+                    // Not viewable in the browser: download it under its real name.
+                    const a = document.createElement('a')
+                    a.href = objectUrl
+                    a.download = fileName
+                    a.click()
+                  } else {
+                    window.open(objectUrl, '_blank', 'noopener')
+                  }
+                  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
+                })
+                .catch((err: unknown) =>
+                  toast.error(`Could not open ${fileName}: ${err instanceof Error ? err.message : String(err)}`),
+                )
             }}
             className="flex items-center gap-3 rounded-lg border p-3 text-sm hover:bg-muted/60"
           >
@@ -496,6 +549,7 @@ export function QueuePage() {
                 <QueueItem
                   key={head.chatJid}
                   event={head}
+                  waitingSinceISO={t[0]!.timestampISO}
                   count={t.length}
                   active={selectedThread === t}
                   onSelect={() => select(head.id)}

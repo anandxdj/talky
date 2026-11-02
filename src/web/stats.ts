@@ -94,6 +94,12 @@ export function startOfLocalDay(ms: number): number {
   return d.getTime();
 }
 
+/** Local midnight `days` calendar days after the local day containing `ms` (DST-safe). */
+export function addLocalDays(ms: number, days: number): number {
+  const d = new Date(ms);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days).getTime();
+}
+
 function localDateKey(ms: number): string {
   const d = new Date(ms);
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -113,9 +119,15 @@ export function median(values: number[]): number | null {
   return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
 }
 
+function isPlaceholder(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed === "[empty]" || trimmed === "[media]";
+}
+
 export function wordCount(text: string): number {
   const trimmed = text.trim();
-  if (!trimmed || trimmed === "[empty]") return 0;
+  // Placeholders written for empty/media-only messages are not words.
+  if (!trimmed || trimmed === "[empty]" || trimmed === "[media]") return 0;
   return trimmed.split(/\s+/).length;
 }
 
@@ -185,7 +197,7 @@ export function computeVoiceTraits(messages: Array<{ ms: number; chat: string; t
     lastMs = message.ms;
     words += wordCount(message.text);
     emoji += (message.text.match(EMOJI_RE) ?? []).length;
-    const firstLetter = message.text.match(/\p{L}/u)?.[0];
+    const firstLetter = isPlaceholder(message.text) ? undefined : message.text.match(/\p{L}/u)?.[0];
     if (firstLetter) {
       lettered += 1;
       if (firstLetter === firstLetter.toLowerCase() && firstLetter !== firstLetter.toUpperCase()) {
@@ -214,13 +226,14 @@ export function computeOverviewStats(input: {
 }): OverviewStats {
   const { nowMs } = input;
   const todayStart = startOfLocalDay(nowMs);
-  const weekStart = todayStart - 6 * DAY_MS;
-  const fortnightStart = todayStart - 13 * DAY_MS;
+  // Calendar arithmetic, not `n * DAY_MS`: a day is 23h or 25h when DST changes.
+  const weekStart = addLocalDays(todayStart, -6);
+  const fortnightStart = addLocalDays(todayStart, -13);
   const voiceDays = input.voiceWindowDays ?? 30;
-  const voiceStart = todayStart - (voiceDays - 1) * DAY_MS;
+  const voiceStart = addLocalDays(todayStart, -(voiceDays - 1));
 
   const hourly = Array.from({ length: 24 }, (_, hour) => ({ hour, received: 0, ...emptyOutcomes() }));
-  const dailyKeys = Array.from({ length: 14 }, (_, i) => localDateKey(fortnightStart + i * DAY_MS + DAY_MS / 2));
+  const dailyKeys = Array.from({ length: 14 }, (_, i) => localDateKey(addLocalDays(fortnightStart, i)));
   const dailyIndex = new Map(dailyKeys.map((key, i) => [key, i]));
   const daily = dailyKeys.map((dateISO) => ({
     dateISO,
@@ -277,7 +290,8 @@ export function computeOverviewStats(input: {
         if (ms >= weekStart) {
           heatmap[weekdayMonFirst(ms)]![new Date(ms).getHours()]! += 1;
           acc.received7d += 1;
-          const dayOffset = Math.floor((startOfLocalDay(ms) - weekStart) / DAY_MS);
+          // Round: local midnights are 23h/24h/25h apart.
+          const dayOffset = Math.round((startOfLocalDay(ms) - weekStart) / DAY_MS);
           if (dayOffset >= 0 && dayOffset < 7) acc.daily7d[dayOffset]! += 1;
         }
         continue;
@@ -372,7 +386,7 @@ export function computeOverviewStats(input: {
   const avg = (xs: number[] | undefined) =>
     xs && xs.length > 0 ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10 : null;
   const wordsTrend = Array.from({ length: voiceDays }, (_, i) => {
-    const key = localDateKey(voiceStart + i * DAY_MS + DAY_MS / 2);
+    const key = localDateKey(addLocalDays(voiceStart, i));
     const day = wordsByDay.get(key);
     return { dateISO: key, you: avg(day?.you), talky: avg(day?.talky) };
   });

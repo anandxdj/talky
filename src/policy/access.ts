@@ -48,8 +48,9 @@ export function buildDirectIdentifiers(
   if (!raw) return values;
 
   values.add(raw);
+  // jidNormalizedUser returns "" for non-JID input; adding "" made any two non-JIDs "match".
   const normalized = jidNormalizedUser(raw).toLowerCase();
-  values.add(normalized);
+  if (normalized) values.add(normalized);
 
   const userPart = normalized.split("@")[0];
   if (userPart) {
@@ -93,7 +94,9 @@ export function evaluateChatPolicy(args: {
 }): { allowed: boolean; reason: string } {
   const { config, chatJid, isGroup } = args;
   if (isGroup) {
-    if (config.mutedGroupJids.includes(chatJid)) {
+    // Same matching as the allowlist (trimmed, case-insensitive): a muted entry must never
+    // be weaker than an allowed one.
+    if (isGroupJidAllowed(chatJid, config.mutedGroupJids)) {
       return { allowed: false, reason: "group is muted" };
     }
     if (config.allowedGroupJids.length === 0) {

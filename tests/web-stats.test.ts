@@ -129,3 +129,15 @@ describe("computeOverviewStats", () => {
     expect(stats.voice.wordsTrend).toHaveLength(30);
   });
 });
+
+describe("voice traits ignore placeholders (BUG-24)", () => {
+  test("[media] / [empty] lines are not words and not lowercase starts", () => {
+    const traits = computeVoiceTraits([
+      { ms: 0, chat: "a", text: "[media]" },
+      { ms: 1_000_000, chat: "a", text: "[media]" },
+      { ms: 2_000_000, chat: "a", text: "Hello There friend" }
+    ]);
+    expect(traits.wordsPerMessage).toBe(1); // 3 words over 3 messages
+    expect(traits.lowercaseShare).toBe(0); // only "Hello…" has a letter to judge
+  });
+});
