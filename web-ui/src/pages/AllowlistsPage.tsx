@@ -51,11 +51,13 @@ function JidListSection({
     onItemsChange(next)
   }
 
-  const blurNormalize = (index: number) => {
-    const row = items[index]?.trim() ?? ''
-    const without = items.filter((_, i) => i !== index)
-    const merged = row ? [...without, row] : without
-    onItemsChange(normalizeJidList(merged))
+  // Raw edits while typing (normalising per keystroke deleted a row the moment it was
+  // cleared or matched another entry); trim/dedupe in place once the field loses focus.
+  const blurNormalize = () => {
+    const normalized = normalizeJidList(items)
+    if (normalized.length !== items.length || normalized.some((v, i) => v !== items[i])) {
+      onItemsChange(normalized)
+    }
   }
 
   const removeAt = (index: number) => {
@@ -74,13 +76,14 @@ function JidListSection({
             <li className="text-sm text-muted-foreground">No entries yet.</li>
           ) : (
             items.map((jid, i) => (
-              <li key={`${jid}-${i}`} className="flex gap-2">
+              // Index key: a value-based key changes on every keystroke and remounts the input.
+              <li key={i} className="flex gap-2">
                 <Input
                   className="font-mono text-sm"
                   value={jid}
                   placeholder="user@s.whatsapp.net or group@g.us"
                   onChange={(e) => updateAt(i, e.target.value)}
-                  onBlur={() => blurNormalize(i)}
+                  onBlur={blurNormalize}
                 />
                 <Button
                   type="button"
@@ -333,7 +336,7 @@ export function AllowlistsPage() {
           description="Private chats that may message the bot when mode is allowlist."
           items={asStringArray(configDraft.allowedDirectJids)}
           onItemsChange={(next) =>
-            patchConfigDraft({ allowedDirectJids: normalizeJidList(next) })
+            patchConfigDraft({ allowedDirectJids: next })
           }
         />
         <JidListSection
@@ -341,7 +344,7 @@ export function AllowlistsPage() {
           description="Groups the bot is permitted to join and use."
           items={asStringArray(configDraft.allowedGroupJids)}
           onItemsChange={(next) =>
-            patchConfigDraft({ allowedGroupJids: normalizeJidList(next) })
+            patchConfigDraft({ allowedGroupJids: next })
           }
         />
       </div>
@@ -351,7 +354,7 @@ export function AllowlistsPage() {
         description="Groups where the bot should stay quiet (still listed for reference)."
         items={asStringArray(configDraft.mutedGroupJids)}
         onItemsChange={(next) =>
-          patchConfigDraft({ mutedGroupJids: normalizeJidList(next) })
+          patchConfigDraft({ mutedGroupJids: next })
         }
       />
 
